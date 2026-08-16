@@ -1,0 +1,28 @@
+# dsh-codex-project bundle patch
+#
+# This file is the `dsh.bundle.patch` layer: when the plugin is installed
+# through the official CLI —
+#
+#   dsh plugin --profile <name> add dsh-codex-project
+#
+# — the command reconciles `dsh.profile.bundles` against installed packages
+# and, seeing this declaration, appends `dsh-codex-project` to the bundle
+# stack. The profile boot then merges THIS patch (a single `insert` of the
+# plugin row) exactly like a manual cordis.patch.yml mount line.
+#
+# Local development without installing: mount via
+#   pnpm dsh --profile web --patch <absolute>/dsh-codex-project/cordis.patch.yml
+# with the row's `name` pointed at the built module (see README).
+#
+# The fs row: the core fs-sandbox entry is disabled and replaced by
+# dsh-codex-project's own fs provider (`./fs`), which is SandboxedFileSystem
+# with the space-aware multi-root fence — a pure superset (outside any space
+# it is byte-identical to the core fence). cordis allows only ONE provider
+# per service name, so the swap must disable the core row.
+- id: fs-sandbox
+  disabled: true
+- insert:
+    - id: codex-project
+      name: 'dsh-codex-project'
+    - id: codex-project-fs
+      name: 'dsh-codex-project/fs'
