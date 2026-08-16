@@ -1,6 +1,8 @@
 /**
  * Additional-dir config API tests: the pure route function over a real
- * temporary store — GET/PUT semantics, validation, 404/405, and persistence.
+ * temporary store — GET/PUT semantics, auto-anchoring, validation, 404/405,
+ * and persistence. A registry-backed workspace with no recorded dirs reads
+ * as empty (200), and its first PUT anchors the record.
  */
 
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
@@ -11,6 +13,7 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest'
 
 import { loadWorkspaceDirs } from '../src/dirs-config.ts'
 import { DirsStore } from '../src/dirs-store.ts'
+import type { WorkspaceRegistryFace } from '../src/dirs-store.ts'
 import { dirsApi } from '../src/dirs-api.ts'
 
 describe('dirs API', () => {
@@ -23,8 +26,15 @@ describe('dirs API', () => {
   const previousConfig = process.env.DSH_CODEX_PROJECT_CONFIG
   const store = new DirsStore()
 
+  const registry: WorkspaceRegistryFace = {
+    list: () => [
+      { id: 'w-known', path: rootA },
+      { id: 'w-add', path: rootB },
+    ],
+  }
+
   function api(method: string, pathname: string, body?: unknown) {
-    return dirsApi(store, method, pathname, body)
+    return dirsApi(store, registry, method, pathname, body)
   }
 
   afterEach(() => {
@@ -49,40 +59,56 @@ describe('dirs API', () => {
 
   it('anchors a record, then sets and lists its dirs', async () => {
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    await store.anchor('w1', rootA)
-    const dirs = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w1', dirs: [rootB] })
+    await store.anchor('w-known', rootA)
+    const dirs = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-known', dirs: [rootB] })
     expect(dirs.status).toBe(200)
     expect((dirs.body as { dirs: string[] }).dirs).toEqual([rootB])
 
-    const listed = await api('GET', '/codex-project/api/dirs?workspaceId=w1')
+    const listed = await api('GET', '/codex-project/api/dirs?workspaceId=w-known')
     expect(listed.status).toBe(200)
     expect((listed.body as { dirs: string[] }).dirs).toEqual([rootB])
   })
 
   it('persists to the data file', async () => {
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    await store.anchor('w1', rootA)
-    await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w1', dirs: [rootB] })
-    expect(loadWorkspaceDirs().w1?.dirs).toEqual([rootB])
+    await store.anchor('w-known', rootA)
+    await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-known', dirs: [rootB] })
+    expect(loadWorkspaceDirs()['w-known']?.dirs).toEqual([rootB])
   })
 
   it('clears dirs with an empty array without deleting the record', async () => {
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    await store.anchor('w1', rootA)
-    const cleared = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w1', dirs: [] })
+    await store.anchor('w-known', rootA)
+    const cleared = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-known', dirs: [] })
     expect(cleared.status).toBe(200)
     expect((cleared.body as { dirs: string[] }).dirs).toEqual([])
-    expect(loadWorkspaceDirs().w1?.path).toBe(rootA)
+    expect(loadWorkspaceDirs()['w-known']?.path).toBe(rootA)
   })
 
   it('dedupes duplicate dirs', async () => {
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    await store.anchor('w1', rootA)
-    const set = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w1', dirs: [rootB, rootB] })
+    await store.anchor('w-known', rootA)
+    const set = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-known', dirs: [rootB, rootB] })
     expect((set.body as { dirs: string[] }).dirs).toEqual([rootB])
   })
 
-  it('rejects unknown workspace ids with 404', async () => {
+  it('reads a registry workspace WITHOUT a record as an empty list (200)', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    const listed = await api('GET', '/codex-project/api/dirs?workspaceId=w-add')
+    expect(listed.status).toBe(200)
+    expect(listed.body).toEqual({ ok: true, dirs: [] })
+  })
+
+  it('anchors automatically on the first PUT for an unrecorded registry workspace', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    const put = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-add', dirs: [rootA] })
+    expect(put.status).toBe(200)
+    const record = loadWorkspaceDirs()['w-add']
+    expect(record?.path).toBe(rootB)
+    expect(record?.dirs).toEqual([rootA])
+  })
+
+  it('rejects a completely unknown workspace id with 404', async () => {
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
     const get = await api('GET', '/codex-project/api/dirs?workspaceId=nope')
     expect(get.status).toBe(404)
@@ -96,7 +122,7 @@ describe('dirs API', () => {
     expect(badBody.status).toBe(400)
     const missingId = await api('PUT', '/codex-project/api/dirs', { dirs: [rootB] })
     expect(missingId.status).toBe(400)
-    const badDirs = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w1', dirs: 'no' })
+    const badDirs = await api('PUT', '/codex-project/api/dirs', { workspaceId: 'w-known', dirs: 'no' })
     expect(badDirs.status).toBe(400)
   })
 

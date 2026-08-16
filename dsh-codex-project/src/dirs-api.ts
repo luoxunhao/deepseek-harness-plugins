@@ -6,14 +6,20 @@
  * Routes:
  *  - GET    /codex-project/api/ping        → mount smoke
  *  - GET    /codex-project/api/dirs        → one workspace's additional dirs
- *                                            (?workspaceId=<id>)
+ *                                            (?workspaceId=<id>) — a workspace
+ *                                            with NO recorded dirs returns an
+ *                                            empty list (never 404: any
+ *                                            registry workspace can manage its
+ *                                            additional dirs)
  *  - PUT    /codex-project/api/dirs        → replace one workspace's dirs
- *                                            ({ workspaceId, dirs })
+ *                                            ({ workspaceId, dirs }); the
+ *                                            workspace is anchored first so a
+ *                                            first-time addition creates its
+ *                                            record
  *  - POST   /codex-project/api/open-directory → native-open a folder (kept)
  *
- * Errors: 400 for invalid input (bad shape, missing dir, empty workspaceId
- * without allowMissing semantics), 404 for unknown workspace ids, 405 for
- * unknown routes/methods.
+ * Errors: 400 for invalid input (bad shape, missing dir, unknown workspace
+ * cannot be resolved from the registry), 405 for unknown routes/methods.
  * @module dsh-codex-project/dirs-api
  */
 
@@ -58,8 +64,9 @@ function parsePut(body: unknown): { workspaceId: string; dirs: string[] } {
 }
 
 /**
- * Dispatch one CRUD request.
+ * Dispatch one request.
  * @param store - the persisted store.
+ * @param registry - the host workspace registry (path resolution for anchoring).
  * @param method - the HTTP method (uppercased).
  * @param pathname - the request path INCLUDING any query
  *   (`/codex-project/api/dirs?workspaceId=<id>`).
@@ -68,6 +75,7 @@ function parsePut(body: unknown): { workspaceId: string; dirs: string[] } {
  */
 export async function dirsApi(
   store: DirsStore,
+  registry: WorkspaceRegistryFace,
   method: string,
   pathname: string,
   body: unknown,
@@ -81,18 +89,24 @@ export async function dirsApi(
         const query = new URL(pathname, 'http://127.0.0.1').searchParams
         const requested = query.get('workspaceId')
         const records = await store.load()
-        // Direct id lookup; unknown ids return 404.
         if (requested !== null) {
+          // An unrecorded workspace is a valid target with no additional
+          // dirs (the empty state); only a totally unknown id is an error.
           const record = records[requested]
-          if (record === undefined) throw new DirsStoreError('not-found', `no workspace ${requested}`)
-          return ok({ ok: true, dirs: record.dirs })
+          if (record === undefined && !isKnownWorkspace(registry, requested)) {
+            throw new DirsStoreError('not-found', `no workspace ${requested}`)
+          }
+          return ok({ ok: true, dirs: record?.dirs ?? [] })
         }
         return ok({ ok: true, spaces: records })
       }
       if (method === 'PUT') {
         const { workspaceId, dirs } = parsePut(body)
+        // First-time addition anchors the workspace (resolving its path from
+        // the registry); a later PUT just replaces the recorded dirs.
+        const anchored = await store.anchor(workspaceId, resolveRegistryPath(registry, workspaceId))
         const record = await store.setDirs(workspaceId, dirs)
-        return ok({ ok: true, dirs: record.dirs })
+        return ok({ ok: true, dirs: record.dirs, path: anchored.path })
       }
       return json(405, { ok: false, error: 'method-not-allowed' })
     }
@@ -104,4 +118,16 @@ export async function dirsApi(
     }
     throw error
   }
+}
+
+/** Whether the id names a registered workspace. */
+function isKnownWorkspace(registry: WorkspaceRegistryFace, workspaceId: string): boolean {
+  return registry.list().some(candidate => candidate.id === workspaceId)
+}
+
+/** Resolve a workspace's canonical path from the registry (throws 404 when unknown). */
+function resolveRegistryPath(registry: WorkspaceRegistryFace, workspaceId: string): string {
+  const workspace = registry.list().find(candidate => candidate.id === workspaceId)
+  if (workspace === undefined) throw new DirsStoreError('not-found', `no workspace ${workspaceId}`)
+  return workspace.path
 }

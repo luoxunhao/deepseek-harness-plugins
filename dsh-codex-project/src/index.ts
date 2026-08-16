@@ -35,8 +35,8 @@ import type { AddDirToolDeps } from './add-dir.ts'
 /** Plugin identity for cordis.yml rows. */
 export const name = 'dsh-codex-project'
 
-/** Services required before mounting: webServer, sessions, workspace registry. */
-export const inject = ['webServer', 'sessions', 'workspaceRegistry']
+/** Services required before mounting: webServer, sessions, workspace registry, tools, approval. */
+export const inject = ['webServer', 'sessions', 'workspaceRegistry', 'tools', 'approval']
 
 /** Structural mirror of the workspace registry (see dirs-store.ts). */
 declare module '@deepseek-ai/cordis' {
@@ -83,7 +83,7 @@ function canonicalOf(path: string): string | undefined {
  * Plugin body: migrate legacy spaces once, serve the /codex-project/api
  * routes, refresh the session reminder (text-idempotent), register the
  * add-dir tool, and wrap the sandbox confine.
- * @param ctx - the host cordis context (webServer, sessions, workspaceRegistry).
+ * @param ctx - the host cordis context (webServer, sessions, workspaceRegistry, tools, approval).
  */
 export function apply(ctx: Context): void {
   const store = new DirsStore()
@@ -115,7 +115,7 @@ export function apply(ctx: Context): void {
         writeJson(response, opened.status, opened.body)
         return
       }
-      const result = await dirsApi(store, request.method ?? 'GET', `${url.pathname}${url.search}`, body)
+      const result = await dirsApi(store, ctx.workspaceRegistry, request.method ?? 'GET', `${url.pathname}${url.search}`, body)
       writeJson(response, result.status, result.body)
     },
   }), 'dsh-codex-project: api routes')
