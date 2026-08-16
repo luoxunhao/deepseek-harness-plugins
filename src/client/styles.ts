@@ -10,11 +10,11 @@
 const TAG_ID = 'dsh-codex-project'
 
 const CSS = `
-/* --- native workspace 「…」 menu injected item ---
+/* --- native workspace 「…」 menu injected rows ---
    Mirrors ui-primitives Menu.module.css .item (min-h 40 / pad 8x10 /
-   r10 / 14/22 / gap 8 / interactive-bg-hover) so 管理工作区 renders
-   pixel-identical to the native 重命名 row. */
-[data-dsh-codex-project-menu-manage] {
+   r10 / 14/22 / gap 8 / interactive-bg-hover) so 打开本地目录 and
+   管理工作区 render pixel-identical to the native 重命名 row. */
+[data-dsh-codex-project-menu-actions] .dsh-cxp-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -30,10 +30,10 @@ const CSS = `
   color: var(--dsw-alias-label-primary);
   text-align: left;
 }
-[data-dsh-codex-project-menu-manage]:hover:not(:disabled) {
+[data-dsh-codex-project-menu-actions] .dsh-cxp-menu-item:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
 }
-[data-dsh-codex-project-menu-manage] .dsh-cxp-menu-manage-icon {
+[data-dsh-codex-project-menu-actions] .dsh-cxp-menu-icon {
   display: inline-flex;
   flex: none;
   width: 16px;
@@ -42,7 +42,7 @@ const CSS = `
   justify-content: center;
   color: var(--dsw-alias-label-tertiary);
 }
-[data-dsh-codex-project-menu-manage] .dsh-cxp-menu-manage-label {
+[data-dsh-codex-project-menu-actions] .dsh-cxp-menu-label {
   flex: 1;
   min-width: 0;
   overflow: hidden;

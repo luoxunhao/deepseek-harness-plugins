@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SpacesApi, SpaceInput, SpaceRecord } from '../src/client/api.ts'
 import type { ClientWorkspacesService, ClientWorkspaceView } from '../src/client/context.ts'
 import { WorkspaceDialog } from '../src/client/workspace-dialog.tsx'
-import { mountWorkspaceMenuManageEntry, MENU_MANAGE_SELECTOR, DIALOG_SELECTOR } from '../src/client/workspace-menu.ts'
+import { mountWorkspaceMenuManageEntry, MENU_MANAGE_SELECTOR, MENU_OPEN_DIRECTORY_SELECTOR, DIALOG_SELECTOR } from '../src/client/workspace-menu.ts'
 
 const ROOT_A = 'E:\\proj-a'
 const ROOT_B = 'D:\\proj-b'
@@ -30,18 +30,21 @@ const WORKSPACES: ClientWorkspaceView[] = [
   { workspaceId: 'w3', path: ROOT_C, title: 'proj-c' },
 ]
 
-/** A workspaces fake with a cached list snapshot and observable picker. */
+/** A workspaces fake with a cached list snapshot, observable picker, and openPath spy. */
 function fakeWorkspaces(picked: string | null = null):
-  { service: ClientWorkspacesService; picks: { count: number } } {
+  { service: ClientWorkspacesService; picks: { count: number }; opened: string[] } {
   const picks = { count: 0 }
+  const opened: string[] = []
   const snapshot = { items: [...WORKSPACES] }
   return {
     service: {
       list: { getSnapshot: () => snapshot, subscribe: () => () => {} },
       pickDirectory: async () => { picks.count += 1; return picked },
       create: async () => ({ workspaceId: 'w-created' }),
+      openPath: async (path) => { opened.push(path) },
     },
     picks,
+    opened,
   }
 }
 
@@ -134,16 +137,50 @@ describe('workspace … menu injection', () => {
     return { row, menu, trigger }
   }
 
-  it('injects 管理工作区 into the open workspace menu', async () => {
+  it('injects 打开本地目录 and 管理工作区 into the open workspace menu', async () => {
     const { menu } = fakeOpenMenu()
     const dispose = mountWorkspaceMenuManageEntry({ workspaces: fakeWorkspaces().service, api: fakeApi().api })
     await new Promise(resolve => setTimeout(resolve, 0))
-    const item = menu.querySelector<HTMLElement>(MENU_MANAGE_SELECTOR)
-    expect(item).not.toBeNull()
-    // Native-cell structure: menuitem button with a leading 16px icon + label.
-    expect(item!.getAttribute('role')).toBe('menuitem')
-    expect(item!.querySelector('svg')).not.toBeNull()
-    expect(item!.textContent).toBe('管理工作区')
+    const openRow = menu.querySelector<HTMLElement>(MENU_OPEN_DIRECTORY_SELECTOR)
+    const manageRow = menu.querySelector<HTMLElement>(MENU_MANAGE_SELECTOR)
+    // Native-cell structure: menuitem buttons with a leading 16px icon + label.
+    expect(openRow?.getAttribute('role')).toBe('menuitem')
+    expect(openRow?.querySelector('svg')).not.toBeNull()
+    expect(openRow?.textContent).toBe('打开本地目录')
+    expect(manageRow?.getAttribute('role')).toBe('menuitem')
+    expect(manageRow?.querySelector('svg')).not.toBeNull()
+    expect(manageRow?.textContent).toBe('管理工作区')
+    dispose()
+  })
+
+  it('hides 打开本地目录 when the host cannot open paths', async () => {
+    const { menu } = fakeOpenMenu()
+    const dispose = mountWorkspaceMenuManageEntry({
+      workspaces: fakeWorkspaces().service,
+      api: fakeApi().api,
+      canOpenPath: () => false,
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(menu.querySelector(MENU_OPEN_DIRECTORY_SELECTOR)).toBeNull()
+    expect(menu.querySelector(MENU_MANAGE_SELECTOR)).not.toBeNull()
+    dispose()
+  })
+
+  it('opens the workspace folder on 打开本地目录 click', async () => {
+    fakeOpenMenu()
+    const escapeEvents: string[] = []
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') escapeEvents.push('escape') })
+    const fake = fakeWorkspaces()
+    const dispose = mountWorkspaceMenuManageEntry({ workspaces: fake.service, api: fakeApi().api })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const row = document.querySelector<HTMLElement>(MENU_OPEN_DIRECTORY_SELECTOR)!
+    await act(async () => {
+      row.click()
+    })
+    await act(async () => {})
+    expect(escapeEvents).toEqual(['escape'])
+    // The shell's directory-opening spelling: `<dir>/.`.
+    expect(fake.opened).toEqual([`${ROOT_A}/.`])
     dispose()
   })
 

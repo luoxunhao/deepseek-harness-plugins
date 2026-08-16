@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-project",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "DSH web plugin inspired by Codex project handling: a native workspace gains any number of shared subdirectories (cross-drive), so sessions read/write them under workspace-write permission — never danger-full-access. Entry: the native workspace '…' menu's 管理工作区 item opening a manage dialog (add/remove subdirectories, 设为主工作区 handover).",
   "type": "module",
   "publishConfig": {

@@ -1,23 +1,32 @@
 /**
  * Native workspace 「…」 menu injection: the workspace row's overflow menu is
  * ui-workspace code with hardcoded items (rename/delete) and an `onSelect`
- * that rejects unknown ids — so the plugin adds its own 管理工作区 item at
- * the DOM level: a MutationObserver watches for the portalled `[role="menu"]`
- * popup that appears while a workspace row carries the `menuOpen` class,
- * injects the item into the popup's viewport, and binds its own click
- * handler (which never goes through the native `onSelect`).
+ * that rejects unknown ids — so the plugin adds its own items at the DOM
+ * level: a MutationObserver watches for the portalled `[role="menu"]` popup
+ * that appears while a workspace row carries the `menuOpen` class, injects
+ * a two-row block into the popup's viewport, and binds its own click
+ * handlers (which never go through the native `onSelect`).
+ *
+ * Injected rows:
+ *  - 打开本地目录 — opens the workspace's folder in the Host file manager
+ *    via the workspaces service's `openPath` (the shell's "Show in folder"
+ *    face; `/<dir>/.` is the established directory-opening spelling). Shown
+ *    only while the page is loopback and the Host handshake reports
+ *    `canOpenPath`, mirroring the shell's own native-action gating.
+ *  - 管理工作区 — opens the plugin's manage dialog (`WorkspaceDialog`),
+ *    which lists the shared subdirectories and offers the 设为主工作区
+ *    handover.
  *
  * Click flow: identify the workspace (row title → workspace registry) →
- * close the menu (Escape, the native document keydown listener) → open the
- * plugin's own manage dialog (`WorkspaceDialog`), which lists the shared
- * subdirectories and offers the 设为主工作区 handover.
+ * close the menu (Escape, the native document keydown listener) → run the
+ * action.
  *
- * The popup unmounts on close, so the injected item dies with it — every
+ * The popup unmounts on close, so the injected rows die with it — every
  * open re-injects (self-healing by construction). Keyboard navigation of
- * the native menu does not see the injected row; mouse clicks work.
+ * the native menu does not see the injected rows; mouse clicks work.
  *
- * The item mirrors the native menu cell structure and metrics (16px leading
- * icon + label, 40px min-height cell) so it renders pixel-identical to the
+ * The rows mirror the native menu cell structure and metrics (16px leading
+ * icon + label, 40px min-height cell) so they render pixel-identical to the
  * native 重命名 row; the CSS lives in `styles.ts`.
  * @module dsh-codex-project/client/workspace-menu
  */
@@ -25,19 +34,24 @@
 import { createElement, Fragment } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
-import { IconSettingsOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconFolderOpenOutline16, IconSettingsOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { SpacesApi } from './api.ts'
 import type { ClientWorkspaceView, ClientWorkspacesService } from './context.ts'
 import { WorkspaceDialog } from './workspace-dialog.tsx'
 
-/** The injected menu item's identity (idempotent per-popup injection). */
+/** The injected block's identity (idempotent per-popup injection). */
+export const MENU_ACTIONS_SELECTOR = '[data-dsh-codex-project-menu-actions]'
+/** The 管理工作区 row (kept for tests and direct queries). */
 export const MENU_MANAGE_SELECTOR = '[data-dsh-codex-project-menu-manage]'
+/** The 打开本地目录 row. */
+export const MENU_OPEN_DIRECTORY_SELECTOR = '[data-dsh-codex-project-menu-open-directory]'
 /** The dialog host's identity (one dialog at a time). */
 export const DIALOG_SELECTOR = '[data-dsh-codex-project-dialog]'
 
-/** The injected item's label. */
-const MENU_ITEM_LABEL = '管理工作区'
+/** The injected rows' labels. */
+const MENU_OPEN_DIRECTORY_LABEL = '打开本地目录'
+const MENU_MANAGE_LABEL = '管理工作区'
 
 /**
  * Mirror of ui-primitives' POINTER_GRACE_MS: the workspace menu closes 200ms
@@ -80,15 +94,20 @@ function closeNativeMenu(): void {
 }
 
 /**
- * Mount the 「…」 menu injection and its manage dialog.
- * @param deps - the workspaces service (identity + picker) and the spaces API.
+ * Mount the 「…」 menu injection (打开本地目录 + 管理工作区) and its manage
+ * dialog.
+ * @param deps - the workspaces service (identity + picker + openPath), the
+ *   spaces API, and an optional native-open capability probe (absent →
+ *   always shown, the pre-connection default).
  * @returns the disposer.
  */
 export function mountWorkspaceMenuManageEntry(deps: {
   workspaces: ClientWorkspacesService
   api: SpacesApi
+  canOpenPath?: () => boolean
 }): () => void {
   const { workspaces, api } = deps
+  const canOpenPath = deps.canOpenPath ?? (() => true)
   let dialogRoot: Root | undefined
   let dialogHost: HTMLDivElement | undefined
   // Injected menu-item roots: unmounted on dispose so a popup still open at
@@ -101,15 +120,15 @@ export function mountWorkspaceMenuManageEntry(deps: {
    * The workspace menu closes on pointer-leave (`closeOnPointerLeave`): the
    * native Menu treats the portaled list and the trigger as ONE React-tree
    * region, so moving the pointer between them never arms the 200ms grace
-   * close. Our injected item renders from a separate React root — the host
+   * close. Our injected rows render from a separate React root — the host
    * div is a root-container boundary the enter/leave simulation cannot see
-   * inside — so a pointer move onto the item looks like leaving the region
-   * and arms a close that never gets cancelled (the menu vanishes while
-   * hovering 管理工作区). Fix: intercept (document capture — the common
-   * ancestor of the sidebar trigger and the portaled list) every `pointerout`
-   * whose relatedTarget lands inside the injected host, so the arm event
-   * never reaches React's delegated listener. Visual hovers are pure CSS
-   * `:hover`, so nothing visible is affected.
+   * inside — so a pointer move onto a row looks like leaving the region and
+   * arms a close that never gets cancelled (the menu vanishes while
+   * hovering). Fix: intercept (document capture — the common ancestor of
+   * the sidebar trigger and the portaled list) every `pointerout` whose
+   * relatedTarget lands inside the injected host, so the arm event never
+   * reaches React's delegated listener. Visual hovers are pure CSS `:hover`,
+   * so nothing visible is affected.
    */
   let activeHost: HTMLElement | undefined
   const stopLeaveArm = (event: PointerEvent): void => {
@@ -139,48 +158,80 @@ export function mountWorkspaceMenuManageEntry(deps: {
     }))
   }
 
+  /** One native-cell menu row: icon + label, self-bound click. */
+  const menuRow = (
+    idAttribute: string,
+    label: string,
+    icon: ReturnType<typeof createElement>,
+    onClick: () => void,
+  ): ReturnType<typeof createElement> => createElement(
+    'button',
+    {
+      type: 'button',
+      role: 'menuitem',
+      [idAttribute]: '',
+      className: 'dsh-cxp-menu-item',
+      onClick: (event: { stopPropagation(): void }) => {
+        event.stopPropagation()
+        onClick()
+      },
+    },
+    createElement(
+      Fragment,
+      null,
+      createElement('span', { className: 'dsh-cxp-menu-icon' }, icon),
+      createElement('span', { className: 'dsh-cxp-menu-label' }, label),
+    ),
+  )
+
   const ensure = (): void => {
     if (typeof document === 'undefined') return
     const row = openWorkspaceRow()
     if (row === null) return
     const menu = workspaceMenuPopup(row)
     if (menu === null) return
-    if (menu.querySelector(MENU_MANAGE_SELECTOR) !== null) return
+    if (menu.querySelector(MENU_ACTIONS_SELECTOR) !== null) return
     const viewport = menu.querySelector<HTMLElement>('[role="presentation"]') ?? menu
     // The row's first button is the native menu trigger; its parent is the
     // Menu root span (the pointer-grace wrapper) — part of the menu region.
     const wrapper = row.querySelector('button')?.parentElement ?? undefined
     const host = document.createElement('div')
+    host.dataset.dshCodexProjectMenuActions = ''
     const root = createRoot(host)
     itemRoots.add(root)
-    // flushSync: the item must be committed into the DOM before `ensure()`
+    // flushSync: the rows must be committed into the DOM before `ensure()`
     // returns — the dedup check on the next MutationObserver callback would
     // otherwise miss a still-pending (async-scheduled) React commit and
     // re-inject into the same popup, looping forever.
     flushSync(() => {
       root.render(createElement(
-        'button',
-        {
-          type: 'button',
-          role: 'menuitem',
-          'data-dsh-codex-project-menu-manage': '',
-          onClick: (event: { stopPropagation(): void }) => {
-            event.stopPropagation()
+        Fragment,
+        null,
+        canOpenPath() && menuRow(
+          'data-dsh-codex-project-menu-open-directory',
+          MENU_OPEN_DIRECTORY_LABEL,
+          createElement(IconFolderOpenOutline16, { size: 16 }),
+          () => {
+            const workspace = workspaceOfRow(row, workspaces)
+            if (workspace === undefined) return
+            closeNativeMenu()
+            // The shell's directory-opening spelling: `<dir>/.` opens the
+            // folder itself with the Host's default application.
+            void workspaces.openPath(`${workspace.path}/.`).catch((error: unknown) => {
+              console.error('[dsh-codex-project] open directory failed:', error)
+            })
+          },
+        ),
+        menuRow(
+          'data-dsh-codex-project-menu-manage',
+          MENU_MANAGE_LABEL,
+          createElement(IconSettingsOutline16, { size: 16 }),
+          () => {
             const workspace = workspaceOfRow(row, workspaces)
             if (workspace === undefined) return
             closeNativeMenu()
             openDialog(workspace)
           },
-        },
-        createElement(
-          Fragment,
-          null,
-          createElement(
-            'span',
-            { className: 'dsh-cxp-menu-manage-icon' },
-            createElement(IconSettingsOutline16, { size: 16 }),
-          ),
-          createElement('span', { className: 'dsh-cxp-menu-manage-label' }, MENU_ITEM_LABEL),
         ),
       ))
     })
@@ -188,8 +239,8 @@ export function mountWorkspaceMenuManageEntry(deps: {
     activeHost = host
 
     // Exit direction: the wrapper cannot see the pointer leave through our
-    // item either, so mirror the native grace — leaving the menu region (the
-    // popup or the trigger's wrapper) from the item arms the same close,
+    // rows either, so mirror the native grace — leaving the menu region (the
+    // popup or the trigger's wrapper) from a row arms the same close,
     // guarded so a stale timer never closes a later popup.
     const scheduleMenuClose = (): void => {
       const timer = setTimeout(() => {
@@ -209,7 +260,7 @@ export function mountWorkspaceMenuManageEntry(deps: {
     }
     host.addEventListener('pointerout', onItemLeave)
     host.addEventListener('pointerover', onItemEnter)
-    console.log('[dsh-codex-project] 管理工作区 item injected into workspace menu')
+    console.log('[dsh-codex-project] 打开本地目录/管理工作区 items injected into workspace menu')
   }
 
   const startWaitObserver = (): void => {
