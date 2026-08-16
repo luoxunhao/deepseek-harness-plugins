@@ -6,27 +6,15 @@
  * @module dsh-codex-project/client/api
  */
 
-/** One shared-directory record as the host serves it (roots[0] = main root). */
-export interface SpaceRecord {
-  id: string
-  /** The owning (main) workspace, when known. */
-  workspaceId?: string
-  title?: string
-  roots: string[]
-  /** Configured roots that no longer exist (read-only derivation; not persisted). */
-  missingRoots?: string[]
+/** One workspace's additional writable directories as the host serves them. */
+export interface WorkspaceDirs {
+  /** Canonical main workspace path (matching anchor). */
+  path: string
+  /** Additional writable directories (absolute, may cross drives). */
+  dirs: string[]
 }
 
-/** The editable fields of one record. */
-export interface SpaceInput {
-  title?: string
-  workspaceId?: string
-  roots: string[]
-  /** Confirmed stale-root cleanup: skip the existence check (empty roots deletes the record). */
-  allowMissingRoots?: boolean
-}
-
-/** A failed spaces call: HTTP status plus the host's error message. */
+/** A failed dirs call: HTTP status plus the host's error message. */
 export class SpacesApiError extends Error {
   constructor(
     public readonly status: number,
@@ -37,16 +25,14 @@ export class SpacesApiError extends Error {
   }
 }
 
-/** The spaces API surface. */
+/** The dirs API surface. */
 export interface SpacesApi {
-  /** The configured shared-directory records. */
-  list(): Promise<SpaceRecord[]>
-  /** Create a record. */
-  create(input: SpaceInput): Promise<SpaceRecord>
-  /** Replace one record's editable fields (anchor settable — the 设为主 operation). */
-  update(id: string, input: SpaceInput): Promise<SpaceRecord>
-  /** Remove one record. */
-  remove(id: string): Promise<void>
+  /** All workspace records (id → { path, dirs }). */
+  list(): Promise<Record<string, WorkspaceDirs>>
+  /** One workspace's additional dirs. */
+  getDirs(workspaceId: string): Promise<string[]>
+  /** Replace one workspace's additional dirs. */
+  setDirs(workspaceId: string, dirs: string[]): Promise<string[]>
   /**
    * Open one local directory in the OS file manager (plugin-owned route —
    * bypasses any openPath interception by other plugins).
@@ -78,14 +64,19 @@ async function request<T>(base: string, method: string, path: string, body?: unk
   return (await response.json()) as T
 }
 
-/** Create the spaces API client against one base path. */
+/** Create the dirs API client against one base path. */
 export function createSpacesApi(base = '/codex-project/api'): SpacesApi {
   const enc = encodeURIComponent
   return {
-    list: async () => (await request<{ spaces: SpaceRecord[] }>(base, 'GET', '/spaces')).spaces,
-    create: async (input) => (await request<{ space: SpaceRecord }>(base, 'POST', '/spaces', input)).space,
-    update: async (id, input) => (await request<{ space: SpaceRecord }>(base, 'PUT', `/spaces/${enc(id)}`, input)).space,
-    remove: async (id) => { await request<{ ok: boolean }>(base, 'DELETE', `/spaces/${enc(id)}`) },
+    list: async () => (await request<{ spaces: Record<string, WorkspaceDirs> }>(base, 'GET', '/dirs')).spaces,
+    getDirs: async (workspaceId) => {
+      const parsed = await request<{ dirs: string[] }>(base, 'GET', `/dirs?workspaceId=${enc(workspaceId)}`)
+      return parsed.dirs
+    },
+    setDirs: async (workspaceId, dirs) => {
+      const parsed = await request<{ dirs: string[] }>(base, 'PUT', '/dirs', { workspaceId, dirs })
+      return parsed.dirs
+    },
     openDirectory: async (path) => { await request<{ ok: boolean }>(base, 'POST', '/open-directory', { path }) },
   }
 }

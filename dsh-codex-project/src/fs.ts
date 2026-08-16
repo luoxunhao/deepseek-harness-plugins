@@ -17,10 +17,10 @@
  * re-canonicalize-immediately-before-delegating TOCTOU narrowing), then
  * delegates to the parent with a `danger-full-access` policy so the parent's
  * own single-root fence is a no-op — the atomic write/edit mechanics
- * (locks, fsio) stay the parent's, verbatim. A configured space root that
+ * (locks, fsio) stay the parent's, verbatim. A configured dir that
  * vanished narrows the writable set to the surviving roots: writing the dead
- * root fails naturally (the directory is gone) without poisoning the rest of
- * the space or any unrelated session.
+ * directory fails naturally (the directory is gone) without poisoning the
+ * rest of the workspace or any unrelated session.
  *
  * Reads pass through untouched (every mode permits reading), exactly like
  * the core seam.
@@ -44,8 +44,7 @@ import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 
 import { isPathUnder } from './containment.ts'
-import { loadSpaces, logMissingRoots, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
-import type { MissingRootsLogger } from './space-config.ts'
+import { loadWorkspaceDirs, matchingWorkspace, requireCanonicalDirectory } from './dirs-config.ts'
 
 /** A policy that makes the parent's single-root fence a no-op. */
 const FULL_ACCESS: SandboxExecutionPolicy = {
@@ -54,20 +53,19 @@ const FULL_ACCESS: SandboxExecutionPolicy = {
 }
 
 /**
- * The writable-root set for one workspace-write mutation: the space's
- * SURVIVING canonical roots (plus the core set's temp entries) when the
- * policy's workspace belongs to a multi-root space, else the core set
- * verbatim. A configured root that vanished narrows the grant to the
- * surviving roots — writing the dead root fails naturally (the directory is
- * gone), so failing the whole mutation would only poison unrelated sessions.
+ * The writable-root set for one workspace-write mutation: the owning
+ * workspace's SURVIVING canonical roots (`path` + existing dirs, plus the
+ * core set's temp entries) when the policy's workspace owns a record with
+ * at least one dir, else the core set verbatim. A configured dir that
+ * vanished narrows the grant to the surviving roots — writing the dead
+ * directory fails naturally (the directory is gone), so failing the whole
+ * mutation would only poison unrelated sessions.
  */
-function writableRootsFor(policy: SandboxExecutionPolicy, logger?: MissingRootsLogger): string[] {
+function writableRootsFor(policy: SandboxExecutionPolicy): string[] {
   const canonicalWorkspace = requireCanonicalDirectory('session workspace', policy.workspaceRoot)
-  const spaces = loadSpaces()
-  logMissingRoots(logger, spaces)
-  const match = matchingMultiRootSpace(spaces, canonicalWorkspace)
-  if (match === undefined) return writableRoots(policy)
-  return [...match.existingRoots, '/tmp', tmpdir()]
+  const match = matchingWorkspace(loadWorkspaceDirs(), canonicalWorkspace)
+  if (match === undefined || match.roots.length <= 1) return writableRoots(policy)
+  return [...match.roots, '/tmp', tmpdir()]
 }
 
 /**
@@ -133,7 +131,7 @@ export class CodexProjectFileSystem extends SandboxedFileSystem {
       throw new FsError(`cannot write "${target.displayPath}": file access denied under read-only mode`, 'FS_SANDBOX_DENIED')
     }
     const fresh = await this.resolve(target.displayPath)
-    for (const root of writableRootsFor(policy, this.ctx.logger)) {
+    for (const root of writableRootsFor(policy)) {
       if (await isPathUnder(fresh.targetKey, root)) return fresh
     }
     throw new FsError(`cannot write "${target.displayPath}": file access denied under workspace-write mode`, 'FS_SANDBOX_DENIED')

@@ -1,7 +1,7 @@
 /**
  * Seam wiring tests: `wrapSandboxConfine` routes confine calls through the
- * codex-project runner exactly when a session's workspace belongs to a
- * multi-root space, and passes everything else through to the original
+ * dsh-codex-project runner exactly when a session's workspace owns
+ * additional dirs, and passes everything else through to the original
  * confine untouched (the pure-superset contract). The wrapper's own
  * end-to-end confinement behavior is proven separately by
  * `scripts/proto-verify.mjs` against real restricted tokens.
@@ -48,7 +48,7 @@ describe('wrapSandboxConfine', () => {
   const wsB = join(base, 'ws-b')
   const outside = join(base, 'outside')
   for (const dir of [wsA, wsB, outside]) mkdirSync(dir)
-  const configPath = join(base, 'spaces.json')
+  const configPath = join(base, 'dirs.json')
   const runnerPath = join(base, 'lib', 'runner.js')
   mkdirSync(join(base, 'lib'), { recursive: true })
   writeFileSync(runnerPath, '')
@@ -59,13 +59,13 @@ describe('wrapSandboxConfine', () => {
     else process.env.DSH_CODEX_PROJECT_CONFIG = previousConfig
   })
 
-  function writeSpaces(spaces: unknown[]): void {
-    writeFileSync(configPath, JSON.stringify({ spaces }, null, 2))
+  function writeDirs(workspaces: Record<string, { path: string; dirs: string[] }>): void {
+    writeFileSync(configPath, JSON.stringify({ workspaces }, null, 2))
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
   }
 
-  it.runIf(isWin)('routes a workspace-write call inside a multi-root space through the runner', () => {
-    writeSpaces([{ id: 'space-1', title: 'Proto', roots: [wsA, wsB] }])
+  it.runIf(isWin)('routes a workspace-write call inside a recorded workspace through the runner', () => {
+    writeDirs({ w1: { path: wsA, dirs: [wsB] } })
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
     const result = provider.confine(['pwsh', '/Command', 'echo hi'], policy(wsA))
@@ -86,7 +86,7 @@ describe('wrapSandboxConfine', () => {
   })
 
   it('passes read-only calls through untouched', () => {
-    writeSpaces([{ id: 'space-1', roots: [wsA, wsB] }])
+    writeDirs({ w1: { path: wsA, dirs: [wsB] } })
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
     const result = provider.confine(['true'], policy(wsA, 'read-only'))
@@ -95,8 +95,8 @@ describe('wrapSandboxConfine', () => {
     dispose()
   })
 
-  it('passes calls outside every space through untouched', () => {
-    writeSpaces([{ id: 'space-1', roots: [wsA, wsB] }])
+  it('passes calls outside every record through untouched', () => {
+    writeDirs({ w1: { path: wsA, dirs: [wsB] } })
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
     const result = provider.confine(['true'], policy(outside))
@@ -105,8 +105,8 @@ describe('wrapSandboxConfine', () => {
     dispose()
   })
 
-  it('passes single-root spaces through untouched (core-identical semantics)', () => {
-    writeSpaces([{ id: 'space-1', roots: [wsA] }])
+  it('passes records without dirs through untouched (core-identical semantics)', () => {
+    writeDirs({ w1: { path: wsA, dirs: [] } })
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
     const result = provider.confine(['true'], policy(wsA))
@@ -115,33 +115,53 @@ describe('wrapSandboxConfine', () => {
     dispose()
   })
 
-  it.runIf(isWin)('still routes through the runner when a configured space root is missing', () => {
-    writeSpaces([{ id: 'space-1', roots: [wsA, join(base, 'missing')] }])
+  it('passes single-root records through untouched (core-identical semantics)', () => {
+    writeDirs({ w1: { path: wsA, dirs: [] } })
+    const { provider, calls } = fakeSandbox()
+    const dispose = wrapSandboxConfine(provider, runnerPath)
+    const result = provider.confine(['true'], policy(wsA))
+    expect(result.argv).toEqual(['true'])
+    expect(calls).toHaveLength(1)
+    dispose()
+  })
+
+  it.runIf(isWin)('still routes through the runner when some added dirs are missing (narrowing)', () => {
+    writeDirs({ w1: { path: wsA, dirs: [join(base, 'missing'), wsB] } })
     const { provider } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
-    // Narrowing: the dead root no longer fails the confine — the runner
-    // materializes grants on the surviving roots instead.
+    // Narrowing: a dead dir is skipped, but the surviving dir keeps the
+    // multi-root route active.
     const result = provider.confine(['true'], policy(wsA))
     expect(result.argv.slice(0, 2)).toEqual([process.execPath, runnerPath])
     expect(result.argv[result.argv.indexOf('--bind') + 1]).toBe(wsA)
     dispose()
   })
 
-  it.runIf(isWin)('unrelated dead spaces never affect other sessions', () => {
-    writeSpaces([
-      { id: 'space-1', roots: [join(base, 'missing-1'), join(base, 'missing-2')] },
-      { id: 'space-2', roots: [wsA, wsB] },
-    ])
+  it('passes through when all added dirs vanish (single root remains)', () => {
+    writeDirs({ w1: { path: wsA, dirs: [join(base, 'missing')] } })
+    const { provider, calls } = fakeSandbox()
+    const dispose = wrapSandboxConfine(provider, runnerPath)
+    // Narrowing to a single root is core-identical: pass through.
+    const result = provider.confine(['true'], policy(wsA))
+    expect(result.argv).toEqual(['true'])
+    expect(calls).toHaveLength(1)
+    dispose()
+  })
+
+  it.runIf(isWin)('unrelated dead records never affect other workspaces', () => {
+    writeDirs({
+      dead: { path: join(base, 'dead-path'), dirs: [join(base, 'dead-dir')] },
+      w1: { path: wsA, dirs: [wsB] },
+    })
     const { provider } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
-    // The fully-dead space is skipped; the workspace still matches space-2.
     const result = provider.confine(['true'], policy(wsA))
     expect(result.argv.slice(0, 2)).toEqual([process.execPath, runnerPath])
     dispose()
   })
 
   it('restores the original confine on dispose', () => {
-    writeSpaces([{ id: 'space-1', roots: [wsA, wsB] }])
+    writeDirs({ w1: { path: wsA, dirs: [wsB] } })
     const { provider } = fakeSandbox()
     const original = provider.confine
     const dispose = wrapSandboxConfine(provider, runnerPath)
@@ -152,16 +172,13 @@ describe('wrapSandboxConfine', () => {
   it('behaves as a pure pass-through on non-Windows hosts', () => {
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
-    // The win32 branch is the only one that can route; the routing branch
-    // itself is guarded by process.platform, exercised implicitly on this
-    // machine. The pass-through path must be platform-independent.
     const result = provider.confine(['true'], policy(wsA))
     expect(result.argv).toEqual(['true'])
     expect(calls).toHaveLength(1)
     dispose()
   })
 
-  it('keeps pass-through behavior when no spaces are configured', () => {
+  it('keeps pass-through behavior when no records are configured', () => {
     delete process.env.DSH_CODEX_PROJECT_CONFIG
     const { provider, calls } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)

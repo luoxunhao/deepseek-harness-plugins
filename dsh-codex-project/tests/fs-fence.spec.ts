@@ -1,10 +1,8 @@
 /**
- * Multi-root fs fence tests: a real `CodexProjectFileSystem` over real
- * temporary directories. The fence is an in-process canonical containment
- * check (not a kernel boundary), so these tests exercise the exact mutation
- * paths the model tools use — write into every space root succeeds, writes
- * outside the space are denied with FS_SANDBOX_DENIED, and the core seam's
- * semantics hold verbatim outside any space.
+ * Additional-dir fs fence tests: a real `CodexProjectFileSystem` over real
+ * temporary directories. Writes into the workspace path and every added dir
+ * succeed; outside denied with FS_SANDBOX_DENIED; a record without dirs and
+ * workspaces outside every record keep the core single-root semantics.
  */
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,11 +20,12 @@ describe('CodexProjectFileSystem', () => {
   // set includes the ambient temp root, so denied targets must live outside
   // it (denial assertions would otherwise be granted by the temp root).
   const base = mkdtempSync(join(homedir(), 'dsh-fs-'))
-  const rootA = join(base, 'root-a')
-  const rootB = join(base, 'root-b')
+  const workspace = join(base, 'workspace')
+  const extraA = join(base, 'extra-a')
+  const extraB = join(base, 'extra-b')
   const outside = join(base, 'outside')
-  for (const dir of [rootA, rootB, outside]) mkdirSync(dir)
-  const configPath = join(base, 'spaces.json')
+  for (const dir of [workspace, extraA, extraB, outside]) mkdirSync(dir)
+  const configPath = join(base, 'dirs.json')
   const previousConfig = process.env.DSH_CODEX_PROJECT_CONFIG
   // Direct construction bypasses the loader's schemastery defaults, so the
   // resolved config must be complete (as the loader would pass it), and the
@@ -42,11 +41,15 @@ describe('CodexProjectFileSystem', () => {
     return { mode, workspaceRoot }
   }
 
+  function writeConfig(workspaces: Record<string, { path: string; dirs: string[] }>): void {
+    writeFileSync(configPath, JSON.stringify({ workspaces }), 'utf8')
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+  }
+
   async function write(path: string, mode: 'read-only' | 'workspace-write' | 'danger-full-access' = 'workspace-write'): Promise<{ ok: boolean; code?: string }> {
     const target = await fs.resolve(path)
     try {
-      // The session workspace is root A (a session whose cwd is a space root).
-      await fs.writeText(target, 'probe', undefined, undefined, policy(rootA, mode))
+      await fs.writeText(target, 'probe', undefined, undefined, policy(workspace, mode))
       return { ok: true }
     } catch (error) {
       return { ok: false, code: (error as { code?: string }).code }
@@ -62,33 +65,35 @@ describe('CodexProjectFileSystem', () => {
     rmSync(base, { recursive: true, force: true })
   })
 
-  it('writes into every root of a multi-root space', async () => {
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, rootB] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    expect(await write(join(rootA, 'file-a.txt'))).toEqual({ ok: true })
-    expect(await write(join(rootB, 'file-b.txt'))).toEqual({ ok: true })
-    expect(await write(join(rootA, 'deep', 'nested', 'file.txt'))).toEqual({ ok: true })
+  it('writes into the workspace path and every added dir of a recorded workspace', async () => {
+    writeConfig({ w1: { path: workspace, dirs: [extraA, extraB] } })
+    expect(await write(join(workspace, 'main.txt'))).toEqual({ ok: true })
+    expect(await write(join(extraA, 'probe.txt'))).toEqual({ ok: true })
+    expect(await write(join(extraB, 'deep', 'nested', 'file.txt'))).toEqual({ ok: true })
   })
 
-  it('denies writes outside the space with FS_SANDBOX_DENIED', async () => {
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, rootB] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    const result = await write(join(outside, 'file.txt'))
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('FS_SANDBOX_DENIED')
-  })
-
-  it('keeps the core single-root semantics outside any space', async () => {
-    delete process.env.DSH_CODEX_PROJECT_CONFIG
-    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
-    const denied = await write(join(rootB, 'file.txt'))
+  it('denies writes outside the workspace with FS_SANDBOX_DENIED', async () => {
+    writeConfig({ w1: { path: workspace, dirs: [extraA] } })
+    const denied = await write(join(outside, 'file.txt'))
     expect(denied.ok).toBe(false)
     expect(denied.code).toBe('FS_SANDBOX_DENIED')
   })
 
+  it('keeps the core single-root semantics for a record without dirs', async () => {
+    writeConfig({ w1: { path: workspace, dirs: [] } })
+    expect(await write(join(workspace, 'file.txt'))).toEqual({ ok: true })
+    const denied = await write(join(extraA, 'file.txt'))
+    expect(denied.ok).toBe(false)
+    expect(denied.code).toBe('FS_SANDBOX_DENIED')
+  })
+
+  it('keeps the core single-root semantics outside every record', async () => {
+    writeConfig({})
+    expect(await write(join(workspace, 'file.txt'))).toEqual({ ok: true })
+  })
+
   it('keeps the core temp-area writability', async () => {
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, rootB] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    writeConfig({ w1: { path: workspace, dirs: [extraA] } })
     const tempTarget = join(tmpdir(), `dsh-fs-temp-${process.pid}`, 'file.txt')
     mkdirSync(join(tmpdir(), `dsh-fs-temp-${process.pid}`), { recursive: true })
     expect(await write(tempTarget)).toEqual({ ok: true })
@@ -96,56 +101,53 @@ describe('CodexProjectFileSystem', () => {
   })
 
   it('denies every mutation under read-only', async () => {
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, rootB] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    const denied = await write(join(rootA, 'file.txt'), 'read-only')
+    writeConfig({ w1: { path: workspace, dirs: [extraA] } })
+    const denied = await write(join(workspace, 'file.txt'), 'read-only')
     expect(denied.ok).toBe(false)
     expect(denied.code).toBe('FS_SANDBOX_DENIED')
   })
 
   it('passes unfenced under danger-full-access', async () => {
-    delete process.env.DSH_CODEX_PROJECT_CONFIG
+    writeConfig({})
     expect(await write(join(outside, 'file.txt'), 'danger-full-access')).toEqual({ ok: true })
   })
 
-  it('narrows to surviving roots when a configured space root is missing', async () => {
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, join(base, 'missing')] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    // The surviving root stays writable — no fail-loud on the whole space.
-    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
-    // Writing under the dead root fails naturally (the directory is gone),
-    // without the space-level "root is not an existing directory" throw.
-    const dead = await write(join(base, 'missing', 'file.txt'))
-    expect(dead.ok).toBe(false)
-  })
-
-  it('unrelated dead spaces never affect other sessions', async () => {
-    // space-1 is fully dead (all roots gone); space-2 owns rootA/rootB.
-    writeFileSync(configPath, JSON.stringify({
-      spaces: [
-        { id: 'space-1', roots: [join(base, 'missing-1'), join(base, 'missing-2')] },
-        { id: 'space-2', roots: [rootA, rootB] },
-      ],
-    }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
-    expect(await write(join(rootB, 'file.txt'))).toEqual({ ok: true })
-    const denied = await write(join(outside, 'file.txt'))
-    expect(denied.ok).toBe(false)
-    expect(denied.code).toBe('FS_SANDBOX_DENIED')
-  })
-
-  it('self-heals without restart: a restored root re-enters the writable set', async () => {
+  it('narrows silently when an added dir vanishes (no throw, others still writable)', async () => {
     const transient = join(base, 'transient')
     mkdirSync(transient)
-    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, transient] }] }))
-    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    writeConfig({ w1: { path: workspace, dirs: [transient, extraA] } })
     expect(await write(join(transient, 'file.txt'))).toEqual({ ok: true })
-    // The root vanishes: the grant narrows, surviving roots stay writable.
+    expect(await write(join(extraA, 'file.txt'))).toEqual({ ok: true })
     rmSync(transient, { recursive: true, force: true })
-    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
-    // The root comes back: the writable set re-expands without any config change.
+    // The surviving roots stay writable; no space-level fail-loud throw.
+    expect(await write(join(extraA, 'file.txt'))).toEqual({ ok: true })
+    expect(await write(join(workspace, 'file.txt'))).toEqual({ ok: true })
+  })
+
+  it('self-heals without restart: a restored dir re-enters the writable set', async () => {
+    const transient = join(base, 'transient2')
+    mkdirSync(transient)
+    writeConfig({ w1: { path: workspace, dirs: [transient] } })
+    expect(await write(join(transient, 'file.txt'))).toEqual({ ok: true })
+    rmSync(transient, { recursive: true, force: true })
+    expect(await write(join(workspace, 'file.txt'))).toEqual({ ok: true })
     mkdirSync(transient)
     expect(await write(join(transient, 'file.txt'))).toEqual({ ok: true })
+  })
+
+  it('unrelated records never affect each other', async () => {
+    writeConfig({
+      w1: { path: workspace, dirs: [extraA] },
+      w2: { path: extraB, dirs: [] },
+    })
+    expect(await write(join(extraA, 'file.txt'))).toEqual({ ok: true })
+    // A cwd matching w1 grants only w1's roots; extraB (w2's path) stays
+    // outside w1's writable set even though w2 exists separately.
+    const denied = await write(join(extraB, 'file.txt'))
+    expect(denied.ok).toBe(false)
+    expect(denied.code).toBe('FS_SANDBOX_DENIED')
+    const outsideDenied = await write(join(outside, 'file.txt'))
+    expect(outsideDenied.ok).toBe(false)
+    expect(outsideDenied.code).toBe('FS_SANDBOX_DENIED')
   })
 })

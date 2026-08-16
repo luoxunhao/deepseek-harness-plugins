@@ -1,13 +1,14 @@
 /**
  * The dsh-codex-project confinement runner: the argv-prefix wrapper the
  * codex-project seam spawns in place of the Linux bwrap profile when a
- * session runs inside a multi-root codex project on Windows. It reads the
- * bwrap-style argv, resolves the configured space whose roots contain the
- * bind root, and confines the wrapped command under the
- * `@deepseek-ai/dsh-sandbox-windows-acl` restricted token with a SPACE-level
- * write SID granted on EVERY space root — the official AclSandbox
- * multi-writable-dir shape, one token, N ACEs, still under workspace-write
- * permission. Sessions outside any multi-root space keep the core behavior:
+ * session runs inside a workspace that owns additional writable dirs on
+ * Windows. It reads the bwrap-style argv, resolves the workspace whose
+ * canonical `path` equals the bind root, and confines the wrapped command
+ * under the `@deepseek-ai/dsh-sandbox-windows-acl` restricted token with a
+ * WORKSPACE-level write SID granted on EVERY surviving root (`path` + dirs)
+ * — the official AclSandbox multi-writable-dir shape, one token, N ACEs,
+ * still under workspace-write permission. Sessions outside any recorded
+ * workspace (or with a record that has no dirs) keep the core behavior:
  * workspace-write delegates to the core windows-acl runner with the seam's
  * exact grant + argv contract (per-workspace SID), and read-only confines
  * wrapper-locally (no grants exist to share).
@@ -22,17 +23,17 @@
  * workspace root. Everything after `--` is the confined command.
  *
  * Branches:
- *  - workspace-write + multi-root space match (the workspace is a canonical
- *    root of a configured space with more than one root): `AclSandbox({
- *    writableDirs: roots, tempDir, writeSid: spaceSid, tempWriteSid, mode:
- *    'workspace-write' })` with `manageDacls: true` — init() materializes the
- *    space SID's Write ACE on every root (STANDING, the cross-session reuse
- *    cache, exactly like a core workspace grant) plus the revocable
- *    private-temp ACE, spawns with stdio inherited, and dispose() revokes
- *    only the temp ACE. The child's token carries [spaceSid, tempSid], so
- *    writes pass exactly where a space root or the private temp carries the
- *    capability.
- *  - workspace-write otherwise (no space match, or a single-root space):
+ *  - workspace-write + workspace match (the bind root is the canonical
+ *    `path` of a record with at least one dir): `AclSandbox({
+ *    writableDirs: roots, tempDir, writeSid: workspaceDirsWriteSid(id),
+ *    tempWriteSid, mode: 'workspace-write' })` with `manageDacls: true` —
+ *    init() materializes the workspace SID's Write ACE on every surviving
+ *    root (STANDING, the cross-session reuse cache, exactly like a core
+ *    workspace grant) plus the revocable private-temp ACE, spawns with
+ *    stdio inherited, and dispose() revokes only the temp ACE. The child's
+ *    token carries [workspaceSid, tempSid], so writes pass exactly where a
+ *    root or the private temp carries the capability.
+ *  - workspace-write otherwise (no record match, or a record with no dirs):
  *    materialize the per-workspace grants (workspace standing, temp
  *    revocable — the core seam's `manageDacls: false` contract) and delegate
  *    to the core runner at `@deepseek-ai/dsh-sandbox-windows-acl/runner`
@@ -42,21 +43,22 @@
  *    SIDs, no grants, ambient temp untouched. (The read-only bwrap profile
  *    carries no workspace root, so there is nothing to delegate.)
  *
- * Space discovery: `DSH_CODEX_PROJECT_CONFIG` names a JSON file
- * `{ "spaces": [{ "id", "title"?, "roots": [...] }] }` (the plugin seam will
- * point it at its data store; the prototype reads it directly). Roots and the
- * workspace are matched in canonical form; the first matching space wins.
- * A space whose configured root is missing narrows to the surviving roots —
- * the token's Write ACEs materialize only on roots that still exist, and
- * writes to the dead root fail naturally (the directory is gone), so a dead
- * root never poisons unrelated sessions.
+ * Workspace discovery: `DSH_CODEX_PROJECT_CONFIG` names a JSON file
+ * `{ "workspaces": { "<id>": { path, dirs } } }` (the plugin seam will
+ * point it at its data store; the prototype reads it directly). The bind
+ * root and each record's `path` are matched in canonical form; a record
+ * whose configured dir vanished narrows to the surviving roots — the
+ * token's Write ACEs materialize only on roots that still exist, and
+ * writes to the dead dir fail naturally (the directory is gone), so a dead
+ * dir never poisons unrelated sessions.
  *
- * The space SID derives from the config file's canonical directory plus the
- * space id via workspaceWriteSid(), NOT from any single root: a space SID is
- * a distinct identity, so a core session granted only its own workspace SID
- * cannot follow a space root's ACE into another root of the space, and a
- * space session's token cannot use one root's core ACE for a root it was not
- * granted. (Same 2-subauthority shape, different digest input.)
+ * The workspace SID derives from the config file's canonical directory plus
+ * the workspace id via workspaceWriteSid(), NOT from any single root: a
+ * workspace SID is a distinct identity, so a core session granted only its
+ * own workspace SID cannot follow a workspace root's ACE into another root
+ * of the recorded set, and a recorded-workspace session's token cannot use
+ * one root's core ACE for a root it was not granted. (Same 2-subauthority
+ * shape, different digest input.)
  *
  * Failure contract (mirrors the core runner): every runner-side failure
  * prints `codex-project-run: <detail>` to stderr and exits 127; the confined
@@ -80,9 +82,9 @@ import {
   workspaceWriteSid,
 } from '@deepseek-ai/dsh-sandbox-windows-acl'
 
-import { loadSpaces, matchingSpace, requireCanonicalDirectory } from './space-config.ts'
-import type { SpaceMatch } from './space-config.ts'
-import { spaceWriteSid } from './space-sid.ts'
+import { loadWorkspaceDirs, matchingWorkspace, requireCanonicalDirectory } from './dirs-config.ts'
+import type { WorkspaceMatch } from './dirs-config.ts'
+import { workspaceDirsWriteSid } from './space-sid.ts'
 
 const RUNNER_SIGNATURE = 'codex-project-run'
 const RUNNER_FAILURE_EXIT = 127
@@ -238,20 +240,21 @@ async function runDelegation(parsed: ParsedArgs, canonicalWorkspace: string): Pr
 }
 
 /**
- * The multi-root space branch: one space-level SID, one restricted token,
- * Write ACEs on every SURVIVING space root (standing) plus the private temp
- * (revocable), spawned with the caller's stdio inherited. A configured root
- * that vanished is skipped — the token never grants a dead directory.
+ * The multi-dir workspace branch: one workspace-level SID, one restricted
+ * token, Write ACEs on every SURVIVING root (`path` + existing dirs)
+ * (standing) plus the private temp (revocable), spawned with the caller's
+ * stdio inherited. A configured dir that vanished is skipped — the token
+ * never grants a dead directory.
  */
-async function runSpaceBranch(
+async function runDirsBranch(
   parsed: ParsedArgs,
-  match: SpaceMatch,
+  match: WorkspaceMatch,
 ): Promise<number> {
   const privateTempDir = createPrivateTempDir()
   const sandbox = new AclSandbox({
-    writableDirs: match.existingRoots,
+    writableDirs: match.roots,
     tempDir: privateTempDir,
-    writeSid: spaceWriteSid(match.space),
+    writeSid: workspaceDirsWriteSid(match.workspaceId),
     tempWriteSid: tempWriteSid(privateTempDir),
     mode: 'workspace-write',
     manageDacls: true,
@@ -300,9 +303,9 @@ async function main(): Promise<number> {
   }
   // parseArgs guarantees --bind under workspace-write.
   const canonicalWorkspace = requireCanonicalDirectory('--bind workspace', parsed.workspace as string)
-  const match = matchingSpace(loadSpaces(), canonicalWorkspace)
-  if (match !== undefined && match.space.roots.length > 1) {
-    return runSpaceBranch(parsed, match)
+  const match = matchingWorkspace(loadWorkspaceDirs(), canonicalWorkspace)
+  if (match !== undefined && match.roots.length > 1) {
+    return runDirsBranch(parsed, match)
   }
   return runDelegation(parsed, canonicalWorkspace)
 }

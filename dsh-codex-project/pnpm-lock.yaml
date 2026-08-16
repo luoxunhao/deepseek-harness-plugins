@@ -29,6 +29,12 @@ importers:
       '@deepseek-ai/dsh-sandbox-windows-acl':
         specifier: 0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(f8724372086ccc1457fc84e7becee2e0)
+      '@deepseek-ai/dsh-user-approval':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(dbdaba06c174c5e30e3a58edf3cc27a9)
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1

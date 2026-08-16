@@ -1,39 +1,49 @@
 /**
- * dsh-codex-project host half: the /codex-project/api JSON routes plus the
- * sandbox seam wiring — sessions inside a multi-root codex project confine
- * through the plugin's runner (`lib/runner.js`), which grants a space-level
- * SID on every root under one restricted token (workspace-write, never
- * danger-full-access). Everything outside a multi-root space keeps the core
- * sandbox behavior bit-identical (see `src/seam.ts`).
- *
- * The full feature (wayfinder tickets) layers on top: codex-project config
- * CRUD, session→space mapping, the multi-root fs fence (ctx.fs provider
- * replacing fs-sandbox) and the settings-page + sidebar UI. Every route
- * passes the same browser-trust fence as the /api gateway — the skeleton
- * checks loopback Host only.
+ * dsh-codex-project host half: the add-dir plugin. The persisted model is a
+ * workspace → additional-writable-dirs map (`~/.dsh-codex-project/dirs.json`
+ * or `$DSH_CODEX_PROJECT_CONFIG`); sessions of a workspace that owns at
+ * least one extra dir confine through the multi-root runner (workspace-level
+ * SID granted on path + dirs under workspace-write), the model can add dirs
+ * via the `add-dir` tool (user-confirmed through the core approval seam),
+ * and a `<system-reminder>` keeps the current directory list visible and
+ * refreshed on changes. Everything outside a recorded workspace (or a record
+ * with no dirs) keeps the core sandbox behavior bit-identical (see
+ * `src/seam.ts`).
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
+import { realpathSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
+import '@deepseek-ai/dsh-tools'
+import '@deepseek-ai/dsh-user-approval'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 
-import { foldSpaceContext } from './context-injection.ts'
+import { foldWorkspaceContext } from './context-injection.ts'
 import { wrapSandboxConfine } from './seam.ts'
 import { openDirectoryRequest } from './open-directory.ts'
-import { migrateSpacesToSubspaces } from './space-migration.ts'
-import { loadSpaces, logMissingRoots } from './space-config.ts'
-import { SpaceStore } from './space-store.ts'
-import { spacesApi } from './spaces-api.ts'
+import { migrateLegacySpaces } from './dirs-migration.ts'
+import { DirsStore } from './dirs-store.ts'
+import type { WorkspaceRegistryFace } from './dirs-store.ts'
+import { dirsApi } from './dirs-api.ts'
+import { defineAddDirTool } from './add-dir.ts'
+import type { AddDirToolDeps } from './add-dir.ts'
 
 /** Plugin identity for cordis.yml rows. */
 export const name = 'dsh-codex-project'
 
-/** Services required before mounting: the webserver routes, the session
- * store, and the workspace registry (the record anchor source; injecting it
- * also waits for its bootstrap so the lazy migration sees the full table). */
+/** Services required before mounting: webServer, sessions, workspace registry. */
 export const inject = ['webServer', 'sessions', 'workspaceRegistry']
+
+/** Structural mirror of the workspace registry (see dirs-store.ts). */
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    workspaceRegistry: WorkspaceRegistryFace
+  }
+}
 
 /** Skeleton trust fence: loopback Host only; the full fence follows the /api gateway's trust source. */
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -60,22 +70,29 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
+/** Canonicalize a registry path (vanished → undefined). */
+function canonicalOf(path: string): string | undefined {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return undefined
+  }
+}
+
 /**
- * Plugin body: register the /codex-project/api JSON routes (config CRUD over
- * the spaces data file) and wrap the sandbox confine in the codex-project
- * routing.
- * @param ctx - the host cordis context (webServer, sessions).
+ * Plugin body: migrate legacy spaces once, serve the /codex-project/api
+ * routes, refresh the session reminder (text-idempotent), register the
+ * add-dir tool, and wrap the sandbox confine.
+ * @param ctx - the host cordis context (webServer, sessions, workspaceRegistry).
  */
 export function apply(ctx: Context): void {
-  const store = new SpaceStore()
+  const store = new DirsStore()
 
-  // Lazy old-format → subspace migration: anchor anchor-less space records to
-  // their host workspace (path-matched) and move the host root to roots[0].
-  // Idempotent; runs on every startup until every record is anchored.
+  // One-time legacy migration (old spaces.json → new dirs structure).
   try {
-    migrateSpacesToSubspaces(ctx.workspaceRegistry)
+    migrateLegacySpaces(ctx.workspaceRegistry, (message) => { ctx.logger.warn(message) })
   } catch (error) {
-    ctx.logger.warn('dsh-codex-project: record migration failed: %o', error)
+    ctx.logger.warn('dsh-codex-project: legacy migration failed: %o', error)
   }
 
   ctx.effect(() => ctx.webServer.register({
@@ -89,8 +106,6 @@ export function apply(ctx: Context): void {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const body = await readJsonBody(request)
       // 打开本地目录: plugin-owned native action (spawns the OS file manager).
-      // Not workspaces.openPath — better-sidebar wraps that method into the
-      // sidebar editor, where a directory is meaningless.
       if (url.pathname === '/codex-project/api/open-directory') {
         if (request.method !== 'POST') {
           writeJson(response, 405, { ok: false, error: 'method not allowed' })
@@ -100,39 +115,49 @@ export function apply(ctx: Context): void {
         writeJson(response, opened.status, opened.body)
         return
       }
-      const result = await spacesApi(store, request.method ?? 'GET', url.pathname, body)
+      const result = await dirsApi(store, request.method ?? 'GET', `${url.pathname}${url.search}`, body)
       writeJson(response, result.status, result.body)
     },
   }), 'dsh-codex-project: api routes')
 
-  // Seed model-facing context once per session: on the pre-step that claims
-  // the session's first user message, fold the shared-record directory list
-  // in right AFTER the claimed batch — the dsh "system reminder after the
-  // first user message" placement (same `agent/pre-step` mechanism
-  // agent-instructions/tool-skill use). The reminder is a neutral
-  // `<system-reminder>` directory list: no file contents, no permission
-  // claims. `next()` runs first; a fold failure keeps the original decision.
-  const foldedSessions = new WeakSet<object>()
+  // Seed/refresh model-facing context: text-idempotent fold after claimed
+  // user messages; a dir-set change naturally changes the text → refresh.
   ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
     const decision = await next()
     try {
-      // Surface broken records (missing roots) as a warn once per space per
-      // process; the fold itself narrows gracefully without throwing.
-      logMissingRoots(ctx.logger, loadSpaces())
-      return foldSpaceContext(decision, messages, agent.session, foldedSessions)
+      return foldWorkspaceContext(decision, messages, agent.session)
     } catch (error) {
       ctx.logger.warn('dsh-codex-project: session context fold failed: %o', error)
       return decision
     }
   })
 
-  // Route sandbox confine through the multi-root runner when the session's
-  // workspace belongs to a multi-root space. `ctx.get` keeps sandbox an
-  // optional dependency: hosts without the sandbox service still get the
-  // routes and UI, they just keep the core confinement behavior.
+  // Register the add-dir model tool (user confirmation via the core
+  // approval seam — dialog and audit are dsh core, the plugin only asks).
+  const deps: AddDirToolDeps = {
+    resolveWorkspaceId: (cwd) => {
+      const canonical = canonicalOf(cwd)
+      if (canonical === undefined) return undefined
+      return ctx.workspaceRegistry.list()
+        .find(w => canonicalOf(w.path) === canonical)?.id
+    },
+    requestApproval: (agent: Agent, path: string, signal: AbortSignal): Promise<ApprovalOutcome> => {
+      return ctx.approval.request({
+        agent,
+        toolName: 'add-dir',
+        reason: `add ${path} to this workspace's additional writable directories?`,
+        signal,
+      })
+    },
+    store,
+  }
+  const tool = defineAddDirTool(deps)
+  ctx.effect(() => ctx.tools.register(tool), 'dsh-codex-project: add-dir tool')
+
+  // Route sandbox confine through the multi-root runner for recorded workspaces.
   const sandbox = ctx.get('sandbox')
   if (sandbox !== undefined) {
     const runnerPath = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
-    ctx.effect(() => wrapSandboxConfine(sandbox, runnerPath, ctx.logger), 'dsh-codex-project: sandbox confine routing')
+    ctx.effect(() => wrapSandboxConfine(sandbox, runnerPath), 'dsh-codex-project: sandbox confine routing')
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex-project",
-  "version": "0.7.1",
-  "description": "DSH web plugin inspired by Codex project handling: a native workspace gains any number of shared subdirectories (cross-drive), so sessions read/write them under workspace-write permission — never danger-full-access. Entry: the native workspace '…' menu's 管理工作区 item opening a manage dialog (add/remove subdirectories, 设为主工作区 handover).",
+  "version": "0.9.0",
+  "description": "DSH web plugin inspired by Claude Code /add-dir: a native workspace gains any number of additional writable directories (cross-drive), the model can add directories via the add-dir tool (core approval confirms), and sessions read/write them under workspace-write permission — never danger-full-access.",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -69,6 +69,8 @@
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
     "cordis": "^4.0.0-rc.7",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
@@ -102,6 +104,8 @@
     "@deepseek-ai/dsh-fs-sandbox": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sandbox": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sandbox-policy": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-sandbox-windows-acl": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-sandbox-windows-acl": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6"
   }
 }

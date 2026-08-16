@@ -1,19 +1,18 @@
 /**
- * Prototype verification for the multi-root codex-project runner
- * (wayfinder prototype ticket #8). Proves the mechanism end to end on
- * Windows with real restricted tokens:
+ * Prototype verification for the additional-dir codex-project runner.
+ * Proves the mechanism end to end on Windows with real restricted tokens:
  *
- *   A. delegation parity   — no space config: wrapper ≡ core seam behavior
+ *   A. delegation parity   — no config: wrapper ≡ core seam behavior
  *                            (workspace writable, sibling dir denied)
- *   B. multi-root space    — space SID granted on EVERY root: all space
- *                            roots writable, outside denied
+ *   B. additional dirs     — workspace SID granted on path + added dirs:
+ *                            both writable, outside denied
  *   C. read-only           — no grants: every target denied
  *   D. core-seam equivalence — the delegation branch reproduces the core
  *                            seam's own grant+runner output byte-for-byte
  *   E. failure contract    — unknown arg fails loud with the runner
- *                            signature + exit 127; a missing space root
- *                            NARROWS to the surviving roots (survivor
- *                            writable, dead root denied) instead of failing
+ *                            signature + exit 127; a record whose added dir
+ *                            vanished NARROWS (survivors writable, dead dir
+ *                            naturally denied) instead of failing
  *   F. exit-code mirror    — the confined child's exit code passes through
  *
  * Test directories live under the user's home (no Everyone-write
@@ -82,7 +81,7 @@ const outside = join(base, 'outside')
 for (const dir of [wsA, wsB, outside]) mkdirSync(dir)
 
 try {
-  // --- A. delegation: no space config -----------------------------------
+  // --- A. delegation: no config -------------------------------------------
   {
     const result = runWrapper(process.env, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', PROBE], [wsA, outside]))
     const lines = probeLines(result.stdout)
@@ -91,16 +90,16 @@ try {
     check('A sibling denied', lines.get(outside) === 'WRITE-DENIED', `got ${lines.get(outside)}`)
   }
 
-  // --- B. multi-root space ----------------------------------------------
-  const spacesPath = join(base, 'spaces.json')
+  // --- B. additional dirs ------------------------------------------------
+  const spacesPath = join(base, 'dirs.json')
   const spacesEnv = { ...process.env, DSH_CODEX_PROJECT_CONFIG: spacesPath }
   {
-    writeSpaces(spacesPath, [{ id: 'space-1', title: 'Proto', roots: [wsA, wsB] }])
+    writeDirs(spacesPath, { w1: { path: wsA, dirs: [wsB] } })
     const result = runWrapper(spacesEnv, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', PROBE], [wsA, wsB, outside]))
     const lines = probeLines(result.stdout)
     check('B status 0', result.status === 0, `status=${result.status} stderr=${result.stderr}`)
-    check('B root A writable', lines.get(wsA) === 'WRITE-OK', `got ${lines.get(wsA)}`)
-    check('B root B writable', lines.get(wsB) === 'WRITE-OK', `got ${lines.get(wsB)}`)
+    check('B workspace writable', lines.get(wsA) === 'WRITE-OK', `got ${lines.get(wsA)}`)
+    check('B added dir writable', lines.get(wsB) === 'WRITE-OK', `got ${lines.get(wsB)}`)
     check('B outside denied', lines.get(outside) === 'WRITE-DENIED', `got ${lines.get(outside)}`)
     check('B probe.txt in wsA', existsSync(join(wsA, 'probe.txt')))
     check('B probe.txt in wsB', existsSync(join(wsB, 'probe.txt')))
@@ -149,20 +148,21 @@ try {
     check('E unknown arg exit 127', unknown.status === 127, `status=${unknown.status}`)
     check('E unknown arg signature', /codex-project-run: unknown argument: --bogus/.test(unknown.stderr), `stderr=${unknown.stderr}`)
 
-    // A missing space root NARROWS to the surviving roots: the survivor
-    // stays writable under the space SID, the dead root is naturally denied.
-    writeSpaces(spacesPath, [{ id: 'space-2', title: 'Broken', roots: [wsA, join(base, 'missing')] }])
+    // An added dir that vanished NARROWS to the surviving roots: the
+    // workspace path stays writable under the workspace SID, the dead dir is
+    // naturally denied (the token never grants a dead directory).
+    writeDirs(spacesPath, { w1: { path: wsA, dirs: [join(base, 'missing')] } })
     const missingRoot = runWrapper(spacesEnv, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', PROBE], [wsA, join(base, 'missing'), outside]))
     const lines = probeLines(missingRoot.stdout)
-    check('E missing root status 0', missingRoot.status === 0, `status=${missingRoot.status} stderr=${missingRoot.stderr}`)
-    check('E surviving root writable', lines.get(wsA) === 'WRITE-OK', `got ${lines.get(wsA)}`)
-    check('E dead root denied', lines.get(join(base, 'missing')) === 'WRITE-DENIED', `got ${lines.get(join(base, 'missing'))}`)
+    check('E missing dir status 0', missingRoot.status === 0, `status=${missingRoot.status} stderr=${missingRoot.stderr}`)
+    check('E workspace writable', lines.get(wsA) === 'WRITE-OK', `got ${lines.get(wsA)}`)
+    check('E dead dir denied', lines.get(join(base, 'missing')) === 'WRITE-DENIED', `got ${lines.get(join(base, 'missing'))}`)
     check('E outside denied', lines.get(outside) === 'WRITE-DENIED', `got ${lines.get(outside)}`)
   }
 
-  // --- F. exit-code mirror (space branch) --------------------------------
+  // --- F. exit-code mirror (workspace branch) ----------------------------
   {
-    writeSpaces(spacesPath, [{ id: 'space-1', title: 'Proto', roots: [wsA, wsB] }])
+    writeDirs(spacesPath, { w1: { path: wsA, dirs: [wsB] } })
     const result = runWrapper(spacesEnv, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', EXIT_PROBE], []))
     check('F exit code mirrored', result.status === 42, `status=${result.status}`)
   }
@@ -170,8 +170,8 @@ try {
   rmSync(base, { recursive: true, force: true })
 }
 
-function writeSpaces(path, spaces) {
-  writeFileSync(path, JSON.stringify({ spaces }, null, 2))
+function writeDirs(path, workspaces) {
+  writeFileSync(path, JSON.stringify({ workspaces }, null, 2))
 }
 
 console.log(failures === 0 ? 'proto-verify: ALL PASS' : `proto-verify: ${failures} FAILURE(S)`)

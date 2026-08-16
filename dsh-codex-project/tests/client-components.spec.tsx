@@ -1,10 +1,8 @@
 /**
- * Project-space client tests: the native workspace 「…」 menu injection
- * (管理工作区 item) and the manage dialog it opens — shared-subdirectory
- * list with 添加/移除 for the owning workspace, the 设为主工作区 handover
- * when the workspace is a shared subdirectory of another record, and the
- * empty state creating the first record. Interactive flows (picker, session
- * start) are verified manually against the live GUI.
+ * dsh-codex-project client tests: the native workspace 「…」 menu injection
+ * (打开本地目录 + 管理工作区 items) and the manage dialog it opens —
+ * additional-writable-dir list with 添加/移除 for the workspace. Interactive
+ * flows (picker, session start) are verified manually against the live GUI.
  */
 
 // @vitest-environment jsdom
@@ -14,7 +12,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { SpacesApi, SpaceInput, SpaceRecord } from '../src/client/api.ts'
+import type { SpacesApi } from '../src/client/api.ts'
 import type { ClientWorkspacesService, ClientWorkspaceView } from '../src/client/context.ts'
 import { WorkspaceDialog } from '../src/client/workspace-dialog.tsx'
 import { mountWorkspaceMenuManageEntry, MENU_MANAGE_SELECTOR, MENU_OPEN_DIRECTORY_SELECTOR, DIALOG_SELECTOR } from '../src/client/workspace-menu.ts'
@@ -45,50 +43,37 @@ function fakeWorkspaces(picked: string | null = null):
   }
 }
 
-/** A spaces API fake around an in-memory record list. */
-function fakeApi(initial: SpaceRecord[] = []):
+/** A spaces API fake around per-workspace dir lists. */
+function fakeApi(dirsByWorkspace: Record<string, string[]> = {}):
   {
     api: SpacesApi
-    records: SpaceRecord[]
-    calls: Array<{ op: string; id?: string; input?: SpaceInput }>
+    dirsByWorkspace: Record<string, string[]>
+    calls: Array<{ op: string; workspaceId?: string; dirs?: string[] }>
     openedDirs: string[]
   } {
-  const records = [...initial]
-  const calls: Array<{ op: string; id?: string; input?: SpaceInput }> = []
+  const dirsByWorkspaceCopy = { ...dirsByWorkspace }
+  const calls: Array<{ op: string; workspaceId?: string; dirs?: string[] }> = []
   const openedDirs: string[] = []
   return {
-    records,
+    dirsByWorkspace: dirsByWorkspaceCopy,
     calls,
     openedDirs,
     api: {
-      list: async () => [...records],
-      create: async (input) => {
-        calls.push({ op: 'create', input })
-        const record: SpaceRecord = { id: `sp-${records.length + 1}`, ...input }
-        records.push(record)
-        return record
-      },
-      update: async (id, input) => {
-        calls.push({ op: 'update', id, input })
-        const record = records.find(candidate => candidate.id === id)
-        if (record === undefined) throw new Error(`unknown record ${id}`)
-        // Mirror the real store: absent fields are preserved.
-        if (input.title !== undefined) record.title = input.title
-        if (input.workspaceId !== undefined) record.workspaceId = input.workspaceId
-        record.roots = input.roots
-        return { ...record }
-      },
-      remove: async (id) => {
-        calls.push({ op: 'remove', id })
-        const at = records.findIndex(candidate => candidate.id === id)
-        if (at >= 0) records.splice(at, 1)
+      list: async () => Object.fromEntries(
+        Object.entries(dirsByWorkspaceCopy).map(([id, dirs]) => [id, { path: id === 'w1' ? ROOT_A : ROOT_B, dirs }]),
+      ),
+      getDirs: async (workspaceId) => [...(dirsByWorkspaceCopy[workspaceId] ?? [])],
+      setDirs: async (workspaceId, dirs) => {
+        calls.push({ op: 'setDirs', workspaceId, dirs })
+        dirsByWorkspaceCopy[workspaceId] = [...dirs]
+        return [...dirs]
       },
       openDirectory: async (path) => { openedDirs.push(path) },
     },
   }
 }
 
-/** Render with effects flushed (the dialog loads records in useEffect). */
+/** Render with effects flushed (the dialog loads dirs in useEffect). */
 async function renderWithEffects(node: ReactNode): Promise<string> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -157,7 +142,6 @@ describe('workspace … menu injection', () => {
     expect(manageRow?.textContent).toBe('管理工作区')
     dispose()
   })
-
 
   it('opens the workspace folder on 打开本地目录 click', async () => {
     fakeOpenMenu()
@@ -266,24 +250,22 @@ describe('WorkspaceDialog', () => {
 
   const workspace = (): ClientWorkspaceView => WORKSPACES[0]!
 
-  it('lists shared subdirectories of the owning workspace and removes one', async () => {
-    const fake = fakeApi([
-      { id: 'r1', workspaceId: 'w1', title: 'proj-a', roots: [ROOT_A, ROOT_B, ROOT_C] },
-    ])
+  it('shows the workspace path and every additional dir, and removes one', async () => {
+    const fake = fakeApi({ w1: [ROOT_B, ROOT_C] })
     const html = await renderWithEffects(createElement(WorkspaceDialog, {
       workspace: workspace(),
       api: fake.api,
       workspaces: fakeWorkspaces().service,
       onClose: () => {},
     }))
-    expect(html).toContain('共享子目录')
-    expect(html).toContain('主工作区')
+    expect(html).toContain('管理工作区')
+    expect(html).toContain('主目录')
     expect(html).toContain(ROOT_A)
+    expect(html).toContain('附加可写目录')
     expect(html).toContain('proj-b')
     expect(html).toContain(ROOT_B)
-    expect(html).toContain('proj-c')
 
-    // Remove one shared subdirectory via its row's 移除 button.
+    // Remove one additional dir via its row's 移除 button.
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -296,19 +278,20 @@ describe('WorkspaceDialog', () => {
       }))
     })
     await act(async () => {})
-    const removeButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('button[title="移除共享子目录"]'))
+    const removeButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('button[title="移除附加目录"]'))
     expect(removeButtons).toHaveLength(2)
     await act(async () => {
       removeButtons[0]!.click()
     })
     await act(async () => {})
-    expect(fake.records[0]!.roots).toEqual([ROOT_A, ROOT_C])
+    expect(fake.dirsByWorkspace.w1).toEqual([ROOT_C])
+    expect(fake.calls).toEqual([{ op: 'setDirs', workspaceId: 'w1', dirs: [ROOT_C] }])
     root.unmount()
     container.remove()
   })
 
-  it('adds a shared subdirectory through the native picker (existing record)', async () => {
-    const fake = fakeApi([{ id: 'r1', workspaceId: 'w1', title: 'proj-a', roots: [ROOT_A] }])
+  it('adds an additional dir through the native picker', async () => {
+    const fake = fakeApi({ w1: [] })
     const picked = 'E:\\picked'
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -322,17 +305,17 @@ describe('WorkspaceDialog', () => {
       }))
     })
     await act(async () => {})
-    clickButton(container, '添加共享子目录')
+    expect(container.textContent).toContain('还没有附加可写目录')
+    clickButton(container, '添加附加目录')
     await act(async () => {})
-    expect(fake.records[0]!.roots).toEqual([ROOT_A, picked])
-    expect(fake.calls).toEqual([{ op: 'update', id: 'r1', input: { roots: [ROOT_A, picked] } }])
+    expect(fake.dirsByWorkspace.w1).toEqual([picked])
+    expect(fake.calls).toEqual([{ op: 'setDirs', workspaceId: 'w1', dirs: [picked] }])
     root.unmount()
     container.remove()
   })
 
-  it('creates the first record from the empty state', async () => {
-    const fake = fakeApi([])
-    const picked = 'E:\\first'
+  it('ignores adding a directory already in the list', async () => {
+    const fake = fakeApi({ w1: [ROOT_B] })
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -340,51 +323,15 @@ describe('WorkspaceDialog', () => {
       root.render(createElement(WorkspaceDialog, {
         workspace: workspace(),
         api: fake.api,
-        workspaces: fakeWorkspaces(picked).service,
+        workspaces: fakeWorkspaces(ROOT_B).service,
         onClose: () => {},
       }))
     })
     await act(async () => {})
-    expect(container.textContent).toContain('还没有共享子目录')
-    clickButton(container, '添加第一个共享子目录')
+    clickButton(container, '添加附加目录')
     await act(async () => {})
-    expect(fake.records).toEqual([{ id: 'sp-1', workspaceId: 'w1', title: 'proj-a', roots: [ROOT_A, picked] }])
-    expect(fake.calls).toEqual([{
-      op: 'create',
-      input: { workspaceId: 'w1', title: 'proj-a', roots: [ROOT_A, picked] },
-    }])
-    root.unmount()
-    container.remove()
-  })
-
-  it('offers 设为主工作区 when the workspace is a shared subdirectory (parent handover)', async () => {
-    const fake = fakeApi([
-      { id: 'r1', workspaceId: 'w1', title: 'proj-a', roots: [ROOT_A, ROOT_B] },
-    ])
-    // w2 (proj-b) is a subdirectory of w1's record.
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    await act(async () => {
-      root.render(createElement(WorkspaceDialog, {
-        workspace: WORKSPACES[1]!,
-        api: fake.api,
-        workspaces: fakeWorkspaces().service,
-        onClose: () => {},
-      }))
-    })
-    await act(async () => {})
-    expect(container.textContent).toContain('此工作区作为共享子目录属于')
-    expect(container.textContent).toContain('proj-a')
-    clickButton(container, '设为主工作区')
-    await act(async () => {})
-    // The record's main seat moved to proj-b; proj-a stays as a subdirectory.
-    expect(fake.records[0]).toEqual({ id: 'r1', workspaceId: 'w2', title: 'proj-a', roots: [ROOT_B, ROOT_A] })
-    expect(fake.calls).toEqual([{
-      op: 'update',
-      id: 'r1',
-      input: { workspaceId: 'w2', roots: [ROOT_B, ROOT_A] },
-    }])
+    expect(fake.calls).toHaveLength(0)
+    expect(fake.dirsByWorkspace.w1).toEqual([ROOT_B])
     root.unmount()
     container.remove()
   })
@@ -397,7 +344,7 @@ describe('WorkspaceDialog', () => {
     await act(async () => {
       root.render(createElement(WorkspaceDialog, {
         workspace: workspace(),
-        api: fakeApi([]).api,
+        api: fakeApi({}).api,
         workspaces: fakeWorkspaces().service,
         onClose: () => { closed.push('closed') },
       }))

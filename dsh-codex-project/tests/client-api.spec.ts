@@ -30,28 +30,24 @@ describe('createSpacesApi', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists spaces from the GET response', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, spaces: [{ id: 's1', roots: ['C:\\a'] }] }))
-    expect(await api.list()).toEqual([{ id: 's1', roots: ['C:\\a'] }])
-    expect(fetchMock).toHaveBeenCalledWith('/codex-project/api/spaces', expect.objectContaining({ method: 'GET' }))
+  it('lists workspace records from the GET response', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, spaces: { w1: { path: 'C:\\a', dirs: ['D:\\b'] } } }))
+    expect(await api.list()).toEqual({ w1: { path: 'C:\\a', dirs: ['D:\\b'] } })
+    expect(fetchMock).toHaveBeenCalledWith('/codex-project/api/dirs', expect.objectContaining({ method: 'GET' }))
   })
 
-  it('creates a space with a JSON body', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(201, { ok: true, space: { id: 's2', title: 'x', roots: ['D:\\b'] } }))
-    expect(await api.create({ title: 'x', roots: ['D:\\b'] })).toEqual({ id: 's2', title: 'x', roots: ['D:\\b'] })
+  it('gets one workspace dirs through the encoded id query', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, dirs: ['D:\\b'] }))
+    expect(await api.getDirs('s/1')).toEqual(['D:\\b'])
+    expect(fetchMock.mock.calls[0]![0]).toBe('/codex-project/api/dirs?workspaceId=s%2F1')
+  })
+
+  it('sets dirs with a JSON body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, dirs: ['D:\\b'] }))
+    expect(await api.setDirs('s1', ['D:\\b'])).toEqual(['D:\\b'])
     const [, init] = fetchMock.mock.calls[0]!
-    expect(init?.method).toBe('POST')
-    expect(init?.body).toBe(JSON.stringify({ title: 'x', roots: ['D:\\b'] }))
-  })
-
-  it('updates and deletes through the encoded id path', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true, space: { id: 's1', roots: [] } }))
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }))
-    expect(await api.update('s/1', { roots: ['E:\\c'] })).toEqual({ id: 's1', roots: [] })
-    await api.remove('s/1')
-    expect(fetchMock.mock.calls[0]![0]).toBe('/codex-project/api/spaces/s%2F1')
-    expect(fetchMock.mock.calls[1]![0]).toBe('/codex-project/api/spaces/s%2F1')
-    expect(fetchMock.mock.calls[1]![1]?.method).toBe('DELETE')
+    expect(init?.method).toBe('PUT')
+    expect(init?.body).toBe(JSON.stringify({ workspaceId: 's1', dirs: ['D:\\b'] }))
   })
 
   it('opens a local directory through the plugin route', async () => {
@@ -64,11 +60,11 @@ describe('createSpacesApi', () => {
   })
 
   it('surfaces the server error message with the status', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(400, { ok: false, error: 'space root is not an existing directory: X' }))
-    await expect(api.create({ roots: ['X'] })).rejects.toMatchObject({
+    fetchMock.mockResolvedValue(jsonResponse(400, { ok: false, error: 'not an existing directory: X' }))
+    await expect(api.setDirs('s1', ['X'])).rejects.toMatchObject({
       name: 'SpacesApiError',
       status: 400,
-      message: 'space root is not an existing directory: X',
+      message: 'not an existing directory: X',
     })
   })
 

@@ -1,26 +1,24 @@
 /**
- * Session context reminder: make the model aware of the shared-directory
- * record it works under — once per session, folded into the step that claims
- * the session's first user message, right AFTER the claimed batch. That is
- * the canonical dsh "system reminder after the first user message" placement
- * (`agent/pre-step` decision rewriting, the same mechanism
- * `@deepseek-ai/dsh-agent-instructions` and `@deepseek-ai/dsh-tool-skill`
- * use), so the reminder reaches the model in the SAME request as the first
- * user message instead of a later standalone step.
+ * Session context reminder: make the model aware of the additional
+ * writable-dir record it works under. Folded into the step that claims the
+ * session's first user message and again whenever the record changes — the
+ * injection is TEXT-IDEMPOTENT instead of one-shot: each pre-step computes
+ * the current reminder and compares it with the plugin reminder already on
+ * the surface; only a different text is injected. This gives refreshes on
+ * directory-set changes (add-dir or the manage dialog) for free, because a
+ * changed set changes the text, with no explicit change events.
  *
  * The reminder carries one short `<system-reminder>` block listing the
- * record's directories — the main workspace root plus the shared
- * subdirectories — and nothing else. The copy deliberately makes no
- * permission claim: the model discovers the actual read/write boundary by
- * trying. AGENTS.md summaries are NOT injected: file content is the model's
- * own tool work, and full-file context would pollute every session for
- * projects the model may never touch.
+ * workspace's main path plus its additional writable directories — and
+ * nothing else. The copy deliberately makes no permission claim (a
+ * directory added by the USER is framing, not an entitlement assertion);
+ * plus a vanished dir is skipped silently. AGENTS.md summaries are NOT
+ * injected: file content is the model's own tool work.
  *
- * Dedup: a session whose surface already carries an identical plugin message
- * (a resumed session) is not seeded again; the one-shot per-session marker
- * stops re-folding within one session. Restarts therefore never accumulate
- * copies, and a session that resumed with an older (non-identical) reminder
- * gets the current text folded after its next user message.
+ * Dedup: `hasIdenticalInjection` compares the full message content — a
+ * resumed session whose surface already carries an identical plugin
+ * message is not re-seeded; one carrying a stale (different) list gets the
+ * current text folded after its next user message.
  * @module dsh-codex-project/context-injection
  */
 
@@ -29,8 +27,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-import { loadSpaces, matchingMultiRootSpace, requireCanonicalDirectory, tryCanonicalDirectory } from './space-config.ts'
-import type { SpaceRecord } from './space-config.ts'
+import { loadWorkspaceDirs, matchingWorkspace, requireCanonicalDirectory, tryCanonicalDirectory } from './dirs-config.ts'
+import type { WorkspaceDirs } from './dirs-config.ts'
 
 /** The plugin's identity in injected message sources. */
 export const PLUGIN_NAME = 'dsh-codex-project'
@@ -50,38 +48,30 @@ export interface InjectionSession {
   readonly events: readonly SessionEvent[]
 }
 
-/** The one-shot fold marker: any object-keyed set works (a `WeakSet` in production). */
-export interface FoldedSessions {
-  has(target: object): boolean
-  add(target: object): void
-}
-
 /**
- * The model-facing `<system-reminder>` text describing one subspace: the
- * current workspace plus every root of the subspace (the host workspace root
- * first, then the extra roots), with the current one marked and vanished
- * roots marked `(⚠ directory missing)`. Roots are shown in their configured
- * form; the current-workspace marker compares canonical forms, so casing or
- * separator differences cannot hide the current workspace. The directory
- * list only: no permission claim, no file contents — a missing-root marker
- * is a fact about the directory, not a grant claim.
+ * The model-facing `<system-reminder>` text describing one workspace's
+ * writable set: the main workspace path plus every additional dir. Roots are
+ * shown in their configured (canonical-ish) spelling; the current-workspace
+ * marker compares canonical forms. Directory list only: no permission
+ * claim, no file contents, missing dirs silently skipped.
  * English copy on purpose — the reminder is model-facing prompt text.
- * @param space - the owning multi-root shared-workspace record.
+ * @param workspaceId - the owning workspace.
+ * @param record - the workspace's persisted record.
  * @param canonicalWorkspace - the canonical session workspace.
  * @returns the reminder text, one `<system-reminder>` block.
  */
-export function composeSpaceContextText(space: SpaceRecord, canonicalWorkspace: string): string {
-  const lines = space.roots.map((root) => {
-    const canonical = tryCanonicalDirectory(root)
-    const isCurrent = canonical !== undefined && canonical === canonicalWorkspace
-    const suffix = isCurrent ? ' (current session workspace)' : ''
-    const marker = canonical === undefined ? ' (⚠ directory missing)' : ''
-    return `- ${root}${suffix}${marker}`
-  })
-  const currentRoot = space.roots.find((root) => tryCanonicalDirectory(root) === canonicalWorkspace) ?? canonicalWorkspace
+export function composeWorkspaceContextText(
+  workspaceId: string,
+  record: WorkspaceDirs,
+  canonicalWorkspace: string,
+): string {
+  const lines = [
+    `- ${record.path}${tryCanonicalDirectory(record.path) === canonicalWorkspace ? ' (current session workspace)' : ''}`,
+  ]
+  for (const dir of record.dirs) if (tryCanonicalDirectory(dir) !== undefined) lines.push(`- ${dir}`)
   return [
     REMINDER_OPEN,
-    `[Workspace sharing] The current session workspace ${currentRoot} is associated with these directories:`,
+    `[Workspace sharing] The current session workspace (${workspaceId}) is associated with these directories:`,
     ...lines,
     REMINDER_CLOSE,
   ].join('\n')
@@ -90,7 +80,8 @@ export function composeSpaceContextText(space: SpaceRecord, canonicalWorkspace: 
 /**
  * Whether the session surface already carries an identical injection from
  * this plugin. Compares the model-facing content and the plugin source tag;
- * a resumed session keeps its earlier reminder instead of stacking a new one.
+ * a resumed session keeps its earlier reminder instead of stacking a new one
+ * when nothing changed.
  * @param session - the live session.
  * @param message - the message about to be folded in.
  * @returns true when an equivalent message is already on the surface.
@@ -107,49 +98,46 @@ export function hasIdenticalInjection(session: InjectionSession, message: UserMe
 }
 
 /**
- * Build the space reminder for a session cwd, or `undefined` when the
- * workspace is outside every multi-root shared record.
+ * Build the reminder for a session cwd, or `undefined` when the workspace is
+ * outside every record / has no surviving additional dir.
  * @param cwd - the session's working directory.
  * @returns the reminder user message, or undefined when nothing applies.
  */
-export function computeSpaceReminder(cwd: string | undefined): UserMessage | undefined {
+export function computeWorkspaceReminder(cwd: string | undefined): UserMessage | undefined {
   if (cwd === undefined) return undefined
   const canonicalWorkspace = requireCanonicalDirectory('session workspace', cwd)
-  const match = matchingMultiRootSpace(loadSpaces(), canonicalWorkspace)
-  if (match === undefined) return undefined
+  const match = matchingWorkspace(loadWorkspaceDirs(), canonicalWorkspace)
+  if (match === undefined || match.roots.length <= 1) return undefined
+  const records = loadWorkspaceDirs()
+  const record = records[match.workspaceId]
+  if (record === undefined) return undefined
   return createUserMessage({
-    content: [{ type: 'text', text: composeSpaceContextText(match.space, canonicalWorkspace) }],
+    content: [{ type: 'text', text: composeWorkspaceContextText(match.workspaceId, record, canonicalWorkspace) }],
     source: { kind: 'plugin', plugin: PLUGIN_NAME },
   })
 }
 
 /**
- * Fold the space reminder into a proposed step, right after the claimed
- * batch. No-op when the step is rejected, claims no user messages (a wake or
- * tool continuation without a direct message), the session was already
- * seeded, no multi-root space matches, or an identical reminder already sits
- * on the surface. The reminder enters BEFORE any driver-appended runtime
- * context, so the direct prompt and the reminder precede machine-owned
- * context — the same ordering agent-instructions uses.
+ * Fold the reminder into a proposed step, right after the claimed batch, but
+ * only when the current text differs from what is already on the surface —
+ * the text-idempotent contract that also refreshes after a directory-set
+ * change. No-op when the step is rejected, claims no user messages, no
+ * record matches, or an identical reminder already sits on the surface.
  * @param decision - the pre-step decision produced so far.
  * @param claimed - the messages this step claimed from the inbox.
- * @param session - the live session (dedup + reminder derivation).
- * @param foldedSessions - per-session one-shot marker set.
+ * @param session - the live session (dedup).
  * @returns the (possibly rewritten) decision.
  */
-export function foldSpaceContext(
+export function foldWorkspaceContext(
   decision: PreStepDecision,
   claimed: readonly UserMessage[],
   session: InjectionSession,
-  foldedSessions: FoldedSessions,
 ): PreStepDecision {
   if (decision.kind !== 'enter') return decision
   if (claimed.length === 0) return decision
-  if (foldedSessions.has(session)) return decision
-  const reminder = computeSpaceReminder(session.header.cwd)
+  const reminder = computeWorkspaceReminder(session.header.cwd)
   if (reminder === undefined) return decision
   if (hasIdenticalInjection(session, reminder)) return decision
-  foldedSessions.add(session)
   const lastClaimedIndex = decision.messages.findLastIndex(message => claimed.includes(message))
   const insertAt = lastClaimedIndex >= 0 ? lastClaimedIndex + 1 : decision.messages.length
   return { kind: 'enter', messages: decision.messages.toSpliced(insertAt, 0, reminder) }

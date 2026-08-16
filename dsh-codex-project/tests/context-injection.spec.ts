@@ -7,14 +7,13 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  composeSpaceContextText,
-  computeSpaceReminder,
-  foldSpaceContext,
+  composeWorkspaceContextText,
+  computeWorkspaceReminder,
+  foldWorkspaceContext,
   hasIdenticalInjection,
   PLUGIN_NAME,
-  type FoldedSessions,
 } from '../src/context-injection.ts'
-import type { SpaceRecord } from '../src/space-config.ts'
+import type { WorkspaceDirs } from '../src/dirs-config.ts'
 
 /** A minimal fake session surface: header cwd + event log. */
 function fakeSession(cwd: string | undefined, surfaceNodes: number[] = [], events: SessionEvent[] = []) {
@@ -52,12 +51,12 @@ const dir = mkdtempSync(join(tmpdir(), 'dsh-codex-project-test-'))
 const rootA = join(dir, 'root-a')
 const rootB = join(dir, 'root-b')
 const elsewhere = join(dir, 'elsewhere')
-const configPath = join(dir, 'spaces.json')
+const configPath = join(dir, 'dirs.json')
 
-const space = (roots: string[], title = '测试空间'): SpaceRecord => ({ id: 'space-1', title, roots })
+const record = (path: string, dirs: string[]): WorkspaceDirs => ({ path, dirs })
 
-function writeConfig(spaces: SpaceRecord[]) {
-  writeFileSync(configPath, JSON.stringify({ spaces }), 'utf8')
+function writeConfig(workspaces: Record<string, WorkspaceDirs>) {
+  writeFileSync(configPath, JSON.stringify({ workspaces }), 'utf8')
 }
 
 beforeEach(() => {
@@ -71,9 +70,9 @@ afterEach(() => {
   delete process.env.DSH_CODEX_PROJECT_CONFIG
 })
 
-describe('composeSpaceContextText', () => {
-  it('renders a <system-reminder> block listing every associated directory, current one marked', () => {
-    const text = composeSpaceContextText(space([rootA, rootB], '我的空间'), rootA)
+describe('composeWorkspaceContextText', () => {
+  it('renders a <system-reminder> block listing the workspace and every dir', () => {
+    const text = composeWorkspaceContextText('w1', record(rootA, [rootB]), rootA)
     expect(text.startsWith('<system-reminder>')).toBe(true)
     expect(text.endsWith('</system-reminder>')).toBe(true)
     expect(text).toContain('Workspace sharing')
@@ -83,22 +82,23 @@ describe('composeSpaceContextText', () => {
   })
 
   it('marks the current workspace by canonical comparison, not configured spelling', () => {
-    // The configured root is spelled in the wrong case; the canonical workspace
+    // The configured path is spelled in the wrong case; the canonical workspace
     // still wins the marker (Windows lookups are case-insensitive).
-    const text = composeSpaceContextText(space([rootA.toLowerCase(), rootB]), rootA)
-    expect(text).toContain(`${rootA.toLowerCase()} (current session workspace)`)
-    expect(text).not.toContain(`${rootB} (current session workspace)`)
+    const text = composeWorkspaceContextText('w1', record(rootA.toLowerCase(), [rootB]), rootA)
+    expect(text).toContain(`- ${rootA.toLowerCase()} (current session workspace)`)
+    expect(text).not.toContain(`- ${rootB.toLowerCase()} (current session workspace)`)
   })
 
-  it('marks vanished roots with a missing-directory marker', () => {
+  it('silently skips vanished dirs without a missing marker', () => {
     const vanished = join(dir, 'vanished')
-    const text = composeSpaceContextText(space([rootA, vanished]), rootA)
-    expect(text).toContain(`- ${rootA} (current session workspace)`)
-    expect(text).toContain(`- ${vanished} (⚠ directory missing)`)
+    const text = composeWorkspaceContextText('w1', record(rootA, [vanished, rootB]), rootA)
+    expect(text).toContain(`- ${rootB}`)
+    expect(text).not.toContain(vanished)
+    expect(text).not.toContain('missing')
   })
 
   it('never claims permissions: the model discovers the boundary by trying', () => {
-    const text = composeSpaceContextText(space([rootA, rootB]), rootA)
+    const text = composeWorkspaceContextText('w1', record(rootA, [rootB]), rootA)
     expect(text).not.toContain('permission')
     expect(text).not.toContain('writable')
     expect(text).not.toContain('read/write')
@@ -109,7 +109,7 @@ describe('composeSpaceContextText', () => {
   })
 
   it('never embeds file contents (AGENTS.md summaries are out of scope)', () => {
-    const text = composeSpaceContextText(space([rootA, rootB]), rootA)
+    const text = composeWorkspaceContextText('w1', record(rootA, [rootB]), rootA)
     expect(text).not.toContain('AGENTS')
     expect(text).not.toMatch(/```/)
   })
@@ -138,10 +138,10 @@ describe('hasIdenticalInjection', () => {
   })
 })
 
-describe('computeSpaceReminder', () => {
+describe('computeWorkspaceReminder', () => {
   it('builds a user-role plugin message listing the record roots', () => {
-    writeConfig([space([rootA, rootB])])
-    const reminder = computeSpaceReminder(rootA)
+    writeConfig({ w1: record(rootA, [rootB]) })
+    const reminder = computeWorkspaceReminder(rootA)
     expect(reminder).toBeDefined()
     expect(reminder!.role).toBe('user')
     expect(reminder!.source).toEqual({ kind: 'plugin', plugin: PLUGIN_NAME })
@@ -150,56 +150,32 @@ describe('computeSpaceReminder', () => {
     expect(text).toContain(rootB)
   })
 
-  it('returns undefined for a single-root space', () => {
-    writeConfig([space([rootA])])
-    expect(computeSpaceReminder(rootA)).toBeUndefined()
+  it('returns undefined for a record without additional dirs', () => {
+    writeConfig({ w1: record(rootA, []) })
+    expect(computeWorkspaceReminder(rootA)).toBeUndefined()
   })
 
-  it('returns undefined for a workspace outside every space', () => {
-    writeConfig([space([rootA, rootB])])
-    expect(computeSpaceReminder(elsewhere)).toBeUndefined()
+  it('returns undefined for a workspace outside every record', () => {
+    writeConfig({ w1: record(rootA, [rootB]) })
+    expect(computeWorkspaceReminder(elsewhere)).toBeUndefined()
   })
 
-  it('keeps the space identity when narrowing leaves a single surviving root', () => {
-    writeConfig([space([rootA, join(dir, 'vanished')])])
-    const reminder = computeSpaceReminder(rootA)
-    expect(reminder).toBeDefined()
-    const text = (reminder!.content[0] as { type: 'text'; text: string } | undefined)?.text
-    expect(text).toContain(`${join(dir, 'vanished')} (⚠ directory missing)`)
-  })
-
-  it('ignores unrelated dead spaces entirely', () => {
-    writeConfig([
-      { id: 'dead', roots: [join(dir, 'dead-1'), join(dir, 'dead-2')] },
-      space([rootA, rootB]),
-    ])
-    const reminder = computeSpaceReminder(rootA)
-    expect(reminder).toBeDefined()
-    const text = (reminder!.content[0] as { type: 'text'; text: string } | undefined)?.text
-    expect(text).toContain(rootB)
-  })
-
-  it('returns undefined when no spaces are configured', () => {
-    writeConfig([])
-    expect(computeSpaceReminder(rootA)).toBeUndefined()
+  it('returns undefined when no records are configured', () => {
+    writeConfig({})
+    expect(computeWorkspaceReminder(rootA)).toBeUndefined()
   })
 
   it('returns undefined without a session cwd', () => {
-    writeConfig([space([rootA, rootB])])
-    expect(computeSpaceReminder(undefined)).toBeUndefined()
+    writeConfig({ w1: record(rootA, [rootB]) })
+    expect(computeWorkspaceReminder(undefined)).toBeUndefined()
   })
 })
 
-describe('foldSpaceContext', () => {
-  const folders = (): FoldedSessions => {
-    const seen = new Set<object>()
-    return { has: target => seen.has(target), add: target => { seen.add(target) } }
-  }
-
+describe('foldWorkspaceContext', () => {
   it('folds the reminder right after the claimed user message', () => {
-    writeConfig([space([rootA, rootB])])
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
-    const folded = foldSpaceContext(enter(user), [user], fakeSession(rootA), folders())
+    const folded = foldWorkspaceContext(enter(user), [user], fakeSession(rootA))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages).toHaveLength(2)
@@ -211,10 +187,10 @@ describe('foldSpaceContext', () => {
   })
 
   it('folds after the whole claimed batch when several messages were claimed', () => {
-    writeConfig([space([rootA, rootB])])
+    writeConfig({ w1: record(rootA, [rootB]) })
     const first = message('first')
     const second = message('second')
-    const folded = foldSpaceContext(enter(first, second), [first, second], fakeSession(rootA), folders())
+    const folded = foldWorkspaceContext(enter(first, second), [first, second], fakeSession(rootA))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages.map(item => item.content)).toEqual([
@@ -225,71 +201,73 @@ describe('foldSpaceContext', () => {
   })
 
   it('keeps driver-appended runtime context after the reminder', () => {
-    writeConfig([space([rootA, rootB])])
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
     const runtime = message('runtime-context')
-    const folded = foldSpaceContext(enter(user, runtime), [user], fakeSession(rootA), folders())
+    const folded = foldWorkspaceContext(enter(user, runtime), [user], fakeSession(rootA))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
-    // Order: claimed batch, reminder, then the runtime context.
     expect(folded.messages[0]).toBe(user)
     expect((folded.messages[1]!.content[0] as { type: 'text'; text: string }).text).toContain('<system-reminder>')
     expect(folded.messages[2]).toBe(runtime)
   })
 
   it('does not fold a rejected step', () => {
-    writeConfig([space([rootA, rootB])])
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
     const decision = { kind: 'reject' as const }
-    expect(foldSpaceContext(decision, [user], fakeSession(rootA), folders())).toBe(decision)
+    expect(foldWorkspaceContext(decision, [user], fakeSession(rootA))).toBe(decision)
   })
 
   it('does not fold a step that claimed no user messages', () => {
-    writeConfig([space([rootA, rootB])])
-    const folded = foldSpaceContext(enter(), [], fakeSession(rootA), folders())
+    writeConfig({ w1: record(rootA, [rootB]) })
+    const folded = foldWorkspaceContext(enter(), [], fakeSession(rootA))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages).toHaveLength(0)
   })
 
-  it('seeds each session at most once', () => {
-    writeConfig([space([rootA, rootB])])
-    const session = fakeSession(rootA)
-    const foldedSessions = folders()
+  it('seeds the reminder despite prior identical-injection short-circuit happening per text', () => {
+    // Fold is text-idempotent: identical text already on the surface short-circuits.
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
-    const first = foldSpaceContext(enter(user), [user], session, foldedSessions)
-    expect(first.kind).toBe('enter')
-    const second = foldSpaceContext(enter(user), [user], session, foldedSessions)
-    expect(second.kind).toBe('enter')
-    if (first.kind !== 'enter' || second.kind !== 'enter') return
-    expect(first.messages).toHaveLength(2)
-    expect(second.messages).toHaveLength(1)
-  })
-
-  it('does not fold a second copy when an identical reminder is already on the surface', () => {
-    writeConfig([space([rootA, rootB])])
-    const user = message('hello')
-    const text = composeSpaceContextText(space([rootA, rootB]), rootA)
+    const text = composeWorkspaceContextText('w1', record(rootA, [rootB]), rootA)
     const resumed = fakeSession(rootA, [0], [userMessageEvent(text)])
-    const folded = foldSpaceContext(enter(user), [user], resumed, folders())
+    const folded = foldWorkspaceContext(enter(user), [user], resumed)
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages).toHaveLength(1)
   })
 
-  it('does not fold for a single-root space (only multi-root records apply)', () => {
-    writeConfig([space([rootA])])
+  it('re-injects when the directory list changed since the last injection', () => {
+    // The surface carries the OLD text (before rootB was added), so the new
+    // text differs and folds again — this powers refresh-on-change.
+    const oldText = composeWorkspaceContextText('w1', record(rootA, []), rootA)
+    // Now the config has rootB too; the freshly computed text differs.
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
-    const folded = foldSpaceContext(enter(user), [user], fakeSession(rootA), folders())
+    const session = fakeSession(rootA, [0], [userMessageEvent(oldText)])
+    const folded = foldWorkspaceContext(enter(user), [user], session)
+    expect(folded.kind).toBe('enter')
+    if (folded.kind !== 'enter') return
+    expect(folded.messages).toHaveLength(2)
+    const text = (folded.messages[1]!.content[0] as { type: 'text'; text: string }).text
+    expect(text).toContain(rootB)
+  })
+
+  it('does not fold for a record without dirs (only multiple-dir records apply)', () => {
+    writeConfig({ w1: record(rootA, []) })
+    const user = message('hello')
+    const folded = foldWorkspaceContext(enter(user), [user], fakeSession(rootA))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages).toHaveLength(1)
   })
 
   it('does not fold without a session cwd', () => {
-    writeConfig([space([rootA, rootB])])
+    writeConfig({ w1: record(rootA, [rootB]) })
     const user = message('hello')
-    const folded = foldSpaceContext(enter(user), [user], fakeSession(undefined), folders())
+    const folded = foldWorkspaceContext(enter(user), [user], fakeSession(undefined))
     expect(folded.kind).toBe('enter')
     if (folded.kind !== 'enter') return
     expect(folded.messages).toHaveLength(1)
