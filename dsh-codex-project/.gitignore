@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output (rebuilt by `pnpm build`; package publish regenerates it)
+lib/
+
+# Test / tooling artifacts
+coverage/
+dist/
+*.tsbuildinfo
+
+# Logs & OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Packed artifacts (pnpm pack)
+*.tgz

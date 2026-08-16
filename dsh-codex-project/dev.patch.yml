@@ -1,0 +1,14 @@
+# Local development mount (never shipped): the row `name` points at the built
+# host module so `dsh --profile web --patch <this-file> --port <p>` mounts the
+# plugin WITHOUT installing it into the profile. On Windows the name must be
+# a file:// URL (a bare E:/ path is parsed as the 'e:' URL scheme).
+#
+# Mirrors cordis.patch.yml including the fs swap: the core fs-sandbox row is
+# disabled and the plugin's multi-root fs provider is mounted in its place.
+- id: fs-sandbox
+  disabled: true
+- insert:
+    - id: codex-project
+      name: 'file:///E:/project/deepseek-harness-plugins/dsh-codex-project/lib/index.js'
+    - id: codex-project-fs
+      name: 'file:///E:/project/deepseek-harness-plugins/dsh-codex-project/lib/fs.js'

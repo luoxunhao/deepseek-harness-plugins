@@ -1,0 +1,25 @@
+# dsh-codex-project — 领域词汇表
+
+本文件只记录领域术语（纯词汇，无实现细节）。实现决策见代码注释与 README。
+
+> 命名溯源：插件源自 **Codex 的项目处理思想**——一个项目由主代码库 + 若干关联目录组成；本插件把这一模型搬进 dsh：工作区 + 共享子目录（可跨盘符），会话在不升级权限（始终 workspace-write）的前提下读写整个共享集合。
+
+## 核心概念
+
+- **工作区（Workspace）**：dsh 原生的目录工作区，单根目录。身份 = `workspaceId`，属性 = `path`（宿主规范路径）、`title`（默认取路径 basename）、`sessionIds`（归属会话）。**本插件的核心概念，沿用原生语义，不新增平行概念。**
+- **共享子目录（SharedSubdirectory）**：挂在一个工作区下的额外目录（可跨盘符、可注册为工作区也可只是裸目录）。一个工作区可配置**任意数量**的共享子目录。
+- **共享配置（SharedRecord）**：一条配置 = 一个工作区的共享集合：`{ workspaceId(主工作区), title?, roots: [主根, 共享子目录...] }`。`roots[0]` 恒为主工作区根目录。
+- **主工作区（MainWorkspace）**：一条共享配置的锚点工作区；"设置主工作区" = 把配置的主位交接给另一个工作区（父可变，原主根降为共享子目录）。
+- **共享读写（SharedAccess）**：会话的可写集合 = 命中配置的全部 roots（主根 ∪ 共享子目录），权限级别 = workspace-write 多根版（不需要 danger-full-access）。命中判定：会话 cwd（规范路径）∈ 某配置 roots 且 roots.length > 1。双向成立：子目录（若注册为工作区）里的会话同样命中该配置。**核心目的：让 dsh 跨目录执行指令、修改文件而不需要 full access。**
+- **上下文提醒（ContextReminder）**：命中配置的会话，在第一条 user 消息后折叠一条 `<system-reminder>` 目录清单（`[Workspace sharing] … associated with these directories:`，英文、零权限声明）——模型通过工具试错发现读写边界。
+
+## 界面概念
+
+- **管理工作区（ManageDialog）**：插件自己的小弹窗，入口 = 原生工作区「…」菜单注入的「管理工作区」项（样式与原生「重命名」项对齐）。内容：该工作区的共享子目录列表（添加/移除）、设为主工作区（父可变交接）、无配置时空状态（添加第一个子目录即建配置）。
+- **打开本地目录（OpenDirectory）**：同菜单注入的另一项——用系统文件管理器打开该工作区文件夹。走**插件自有路由**（POST /codex-project/api/open-directory，host 侧 spawn explorer.exe），不走 workspaces.openPath——那是聊天文件打开通道，better-sidebar 会把它劫持进侧边栏编辑器（目录会报 "is a directory"）。
+
+## 关系
+
+- 工作区 1—N 共享子目录（一条配置）；共享子目录 N—1 主工作区（其目录出现在该配置的 roots 中）。
+- 配置层互斥（UI 操作保证）：一个目录要么是某配置的共享子目录、要么是自己的主工作区根；「设为主工作区」完成两者的交接。
+- 会话的共享集合 = 其 cwd 命中的那条配置的全部 roots（单配置模型，无并集）。
