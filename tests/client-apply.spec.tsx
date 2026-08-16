@@ -26,18 +26,14 @@ function fakeContext(): Context & { disposers: Array<() => void | (() => void)> 
       },
       pickDirectory: async () => null,
       create: async () => ({ workspaceId: 'w1' }),
-      openPath: async () => {},
     },
-    get: <T = unknown>(name: string): T | undefined => (
-      name === 'workspaces' ? target.workspaces as T : undefined
-    ),
     effect: (callback) => {
       state.disposers.push(callback)
     },
   }
   // Mirror the cordis proxy: any property access outside the declared
   // inject list and the built-in faces throws.
-  const allowed = new Set([...inject, 'effect', 'get'])
+  const allowed = new Set([...inject, 'effect'])
   return new Proxy(target, {
     get(inner, prop) {
       if (typeof prop === 'string' && !allowed.has(prop) && !(prop in inner)) {

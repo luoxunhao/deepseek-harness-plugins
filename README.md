@@ -28,7 +28,7 @@ Codex 处理项目时，一个"项目"往往横跨多个目录：主代码库、
 |---|---|
 | 共享子目录配置 | 每个工作区可配置任意数量共享子目录（跨盘符、可裸目录） |
 | 「管理工作区」弹窗 | 原生工作区「…」菜单注入入口：添加/移除共享子目录、设为主工作区交接 |
-| 「打开本地目录」 | 原生「…」菜单注入入口：用系统默认应用打开该工作区文件夹（复用 shell 的 Show-in-folder 通道，<dir>/. 约定；仅 loopback + canOpenPath 时显示） |
+| 「打开本地目录」 | 原生「…」菜单注入入口：用系统文件管理器打开该工作区文件夹（插件自有路由 spawn explorer.exe——不走 workspaces.openPath，避免被 better-sidebar 等插件劫持到侧边栏编辑器） |
 | 多根沙箱 runner | 命中配置的会话，shell/subprocess 自动走多根受限令牌（`lib/runner.js`） |
 | 多根 fs fence | 进程内 fs 工具（read/write/edit）同样按配置 roots 放行（`lib/fs.js`） |
 | 会话上下文提醒 | 第一条 user 消息后折叠 `<system-reminder>` 目录清单（英文、零权限声明，模型自己试错） |
@@ -129,5 +129,7 @@ dsh plugin --profile <name> add E:/project/deepseek-harness-plugins/dsh-codex-pr
 
 ## 版本记录
 
+- **0.7.1**：修复「打开本地目录」——改用插件自有路由 /codex-project/api/open-directory（host 侧 spawn explorer.exe），不再走 workspaces.openPath（该方法是聊天文件打开通道，会被 better-sidebar 包装进侧边栏编辑器，目录无处安放而报 "is a directory"）。
+- **0.7.0**：「…」菜单新增「打开本地目录」（初版走 workspaces.openPath，后被 better-sidebar 拦截问题推翻）。
 - **0.6.0**：更名 `dsh-codex-project`（源自 Codex 项目处理思想）；配置路径迁移；文档重写；文档化安全边界。
 - **0.5.0**：共享子目录模型定型（工作区 + 任意共享子目录 + 管理工作区弹窗 + 设为主工作区）。

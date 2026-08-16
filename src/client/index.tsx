@@ -11,7 +11,7 @@
  * Failure policy: DOM mounting problems are logged, never thrown — an
  * external plugin must not take the GUI down.
  */
-import type { ClientConnectionHandle, Context } from './context.ts'
+import type { Context } from './context.ts'
 import { createSpacesApi } from './api.ts'
 import { mountWorkspaceMenuManageEntry } from './workspace-menu.ts'
 import { injectStyles } from './styles.ts'
@@ -43,16 +43,9 @@ export function apply(ctx: Context): void {
     }
   }
   mount('styles', () => injectStyles())
-  const connection = ctx.get<ClientConnectionHandle>('connection') ?? undefined
   mount('workspace … menu entry', () => mountWorkspaceMenuManageEntry({
     workspaces: ctx.workspaces,
     api,
-    // Native-open gating mirrors the shell's own "Show in folder": shown
-    // only on a loopback page whose Host handshake reports canOpenPath.
-    // Absent connection service (tests, minimal hosts) defaults to shown —
-    // the action fails safely through openPath's rejection.
-    canOpenPath: () => connection === undefined
-      || (connection.isLoopback && connection.hostDescription.getSnapshot()?.canOpenPath === true),
   }))
   ctx.effect(() => () => {
     for (const dispose of disposers.splice(0)) dispose()

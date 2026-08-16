@@ -30,32 +30,36 @@ const WORKSPACES: ClientWorkspaceView[] = [
   { workspaceId: 'w3', path: ROOT_C, title: 'proj-c' },
 ]
 
-/** A workspaces fake with a cached list snapshot, observable picker, and openPath spy. */
+/** A workspaces fake with a cached list snapshot and observable picker. */
 function fakeWorkspaces(picked: string | null = null):
-  { service: ClientWorkspacesService; picks: { count: number }; opened: string[] } {
+  { service: ClientWorkspacesService; picks: { count: number } } {
   const picks = { count: 0 }
-  const opened: string[] = []
   const snapshot = { items: [...WORKSPACES] }
   return {
     service: {
       list: { getSnapshot: () => snapshot, subscribe: () => () => {} },
       pickDirectory: async () => { picks.count += 1; return picked },
       create: async () => ({ workspaceId: 'w-created' }),
-      openPath: async (path) => { opened.push(path) },
     },
     picks,
-    opened,
   }
 }
 
 /** A spaces API fake around an in-memory record list. */
 function fakeApi(initial: SpaceRecord[] = []):
-  { api: SpacesApi; records: SpaceRecord[]; calls: Array<{ op: string; id?: string; input?: SpaceInput }> } {
+  {
+    api: SpacesApi
+    records: SpaceRecord[]
+    calls: Array<{ op: string; id?: string; input?: SpaceInput }>
+    openedDirs: string[]
+  } {
   const records = [...initial]
   const calls: Array<{ op: string; id?: string; input?: SpaceInput }> = []
+  const openedDirs: string[] = []
   return {
     records,
     calls,
+    openedDirs,
     api: {
       list: async () => [...records],
       create: async (input) => {
@@ -79,6 +83,7 @@ function fakeApi(initial: SpaceRecord[] = []):
         const at = records.findIndex(candidate => candidate.id === id)
         if (at >= 0) records.splice(at, 1)
       },
+      openDirectory: async (path) => { openedDirs.push(path) },
     },
   }
 }
@@ -153,25 +158,13 @@ describe('workspace … menu injection', () => {
     dispose()
   })
 
-  it('hides 打开本地目录 when the host cannot open paths', async () => {
-    const { menu } = fakeOpenMenu()
-    const dispose = mountWorkspaceMenuManageEntry({
-      workspaces: fakeWorkspaces().service,
-      api: fakeApi().api,
-      canOpenPath: () => false,
-    })
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(menu.querySelector(MENU_OPEN_DIRECTORY_SELECTOR)).toBeNull()
-    expect(menu.querySelector(MENU_MANAGE_SELECTOR)).not.toBeNull()
-    dispose()
-  })
 
   it('opens the workspace folder on 打开本地目录 click', async () => {
     fakeOpenMenu()
     const escapeEvents: string[] = []
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') escapeEvents.push('escape') })
-    const fake = fakeWorkspaces()
-    const dispose = mountWorkspaceMenuManageEntry({ workspaces: fake.service, api: fakeApi().api })
+    const fake = fakeApi()
+    const dispose = mountWorkspaceMenuManageEntry({ workspaces: fakeWorkspaces().service, api: fake.api })
     await new Promise(resolve => setTimeout(resolve, 0))
     const row = document.querySelector<HTMLElement>(MENU_OPEN_DIRECTORY_SELECTOR)!
     await act(async () => {
@@ -179,8 +172,8 @@ describe('workspace … menu injection', () => {
     })
     await act(async () => {})
     expect(escapeEvents).toEqual(['escape'])
-    // The shell's directory-opening spelling: `<dir>/.`.
-    expect(fake.opened).toEqual([`${ROOT_A}/.`])
+    // The plugin-owned route receives the workspace's canonical path.
+    expect(fake.openedDirs).toEqual([ROOT_A])
     dispose()
   })
 

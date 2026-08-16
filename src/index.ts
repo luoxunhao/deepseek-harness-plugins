@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-session'
 
 import { foldSpaceContext } from './context-injection.ts'
 import { wrapSandboxConfine } from './seam.ts'
+import { openDirectoryRequest } from './open-directory.ts'
 import { migrateSpacesToSubspaces } from './space-migration.ts'
 import { SpaceStore } from './space-store.ts'
 import { spacesApi } from './spaces-api.ts'
@@ -86,6 +87,18 @@ export function apply(ctx: Context): void {
       }
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const body = await readJsonBody(request)
+      // 打开本地目录: plugin-owned native action (spawns the OS file manager).
+      // Not workspaces.openPath — better-sidebar wraps that method into the
+      // sidebar editor, where a directory is meaningless.
+      if (url.pathname === '/codex-project/api/open-directory') {
+        if (request.method !== 'POST') {
+          writeJson(response, 405, { ok: false, error: 'method not allowed' })
+          return
+        }
+        const opened = openDirectoryRequest(body)
+        writeJson(response, opened.status, opened.body)
+        return
+      }
       const result = await spacesApi(store, request.method ?? 'GET', url.pathname, body)
       writeJson(response, result.status, result.body)
     },

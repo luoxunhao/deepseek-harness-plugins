@@ -54,6 +54,15 @@ describe('createSpacesApi', () => {
     expect(fetchMock.mock.calls[1]![1]?.method).toBe('DELETE')
   })
 
+  it('opens a local directory through the plugin route', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true }))
+    await api.openDirectory('E:\\proj')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/codex-project/api/open-directory')
+    expect(init?.method).toBe('POST')
+    expect(init?.body).toBe(JSON.stringify({ path: 'E:\\proj' }))
+  })
+
   it('surfaces the server error message with the status', async () => {
     fetchMock.mockResolvedValue(jsonResponse(400, { ok: false, error: 'space root is not an existing directory: X' }))
     await expect(api.create({ roots: ['X'] })).rejects.toMatchObject({

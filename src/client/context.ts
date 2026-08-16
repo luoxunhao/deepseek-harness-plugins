@@ -35,32 +35,11 @@ export interface ClientWorkspacesService {
    * wire `WorkspaceView` — its id field is `workspaceId`.
    */
   create(input: { path: string }): Promise<{ workspaceId: string }>
-  /**
-   * Open a filesystem path with the Host operating system's default
-   * application — the same face the shell's "Show in folder" uses. Pass
-   * `<dir>/.` to open a directory itself in the file manager. Rejects when
-   * the Host cannot open the path (never leaves the page).
-   */
-  openPath(path: string): Promise<void>
-}
-
-/** The connection-service face (subset): host facts for native-capability gating. */
-export interface ClientConnectionHandle {
-  /** Whether the current page authority is loopback. */
-  readonly isLoopback: boolean
-  /** Latest connected-generation Host description (absent before connect). */
-  readonly hostDescription: {
-    getSnapshot(): { canOpenPath: boolean } | undefined
-  }
 }
 
 /** The client cordis context for this plugin. */
 export interface Context {
   workspaces: ClientWorkspacesService
-  /** Present when the client runtime's connection service is mounted. */
-  connection?: ClientConnectionHandle
-  /** Read an optional service by name (cordis Context face). */
-  get<T = unknown>(name: string): T | undefined
   /** Register a fiber teardown callback (cordis Context face). */
   effect(callback: () => void | (() => void), name?: string): void
 }

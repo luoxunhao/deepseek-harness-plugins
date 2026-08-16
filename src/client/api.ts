@@ -43,6 +43,11 @@ export interface SpacesApi {
   update(id: string, input: SpaceInput): Promise<SpaceRecord>
   /** Remove one record. */
   remove(id: string): Promise<void>
+  /**
+   * Open one local directory in the OS file manager (plugin-owned route —
+   * bypasses any openPath interception by other plugins).
+   */
+  openDirectory(path: string): Promise<void>
 }
 
 async function request<T>(base: string, method: string, path: string, body?: unknown): Promise<T> {
@@ -77,5 +82,6 @@ export function createSpacesApi(base = '/codex-project/api'): SpacesApi {
     create: async (input) => (await request<{ space: SpaceRecord }>(base, 'POST', '/spaces', input)).space,
     update: async (id, input) => (await request<{ space: SpaceRecord }>(base, 'PUT', `/spaces/${enc(id)}`, input)).space,
     remove: async (id) => { await request<{ ok: boolean }>(base, 'DELETE', `/spaces/${enc(id)}`) },
+    openDirectory: async (path) => { await request<{ ok: boolean }>(base, 'POST', '/open-directory', { path }) },
   }
 }

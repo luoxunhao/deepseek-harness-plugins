@@ -8,11 +8,11 @@
  * handlers (which never go through the native `onSelect`).
  *
  * Injected rows:
- *  - 打开本地目录 — opens the workspace's folder in the Host file manager
- *    via the workspaces service's `openPath` (the shell's "Show in folder"
- *    face; `/<dir>/.` is the established directory-opening spelling). Shown
- *    only while the page is loopback and the Host handshake reports
- *    `canOpenPath`, mirroring the shell's own native-action gating.
+ *  - 打开本地目录 — opens the workspace's folder in the OS file manager via
+ *    the plugin's own host route (`/codex-project/api/open-directory`, which
+ *    spawns explorer.exe). Deliberately NOT `workspaces.openPath`:
+ *    dsh-better-sidebar wraps that method into its sidebar editor, where a
+ *    directory is meaningless (`"<path>" is a directory`).
  *  - 管理工作区 — opens the plugin's manage dialog (`WorkspaceDialog`),
  *    which lists the shared subdirectories and offers the 设为主工作区
  *    handover.
@@ -96,18 +96,14 @@ function closeNativeMenu(): void {
 /**
  * Mount the 「…」 menu injection (打开本地目录 + 管理工作区) and its manage
  * dialog.
- * @param deps - the workspaces service (identity + picker + openPath), the
- *   spaces API, and an optional native-open capability probe (absent →
- *   always shown, the pre-connection default).
+ * @param deps - the workspaces service (identity) and the spaces API.
  * @returns the disposer.
  */
 export function mountWorkspaceMenuManageEntry(deps: {
   workspaces: ClientWorkspacesService
   api: SpacesApi
-  canOpenPath?: () => boolean
 }): () => void {
   const { workspaces, api } = deps
-  const canOpenPath = deps.canOpenPath ?? (() => true)
   let dialogRoot: Root | undefined
   let dialogHost: HTMLDivElement | undefined
   // Injected menu-item roots: unmounted on dispose so a popup still open at
@@ -207,7 +203,7 @@ export function mountWorkspaceMenuManageEntry(deps: {
       root.render(createElement(
         Fragment,
         null,
-        canOpenPath() && menuRow(
+        menuRow(
           'data-dsh-codex-project-menu-open-directory',
           MENU_OPEN_DIRECTORY_LABEL,
           createElement(IconFolderOpenOutline16, { size: 16 }),
@@ -215,9 +211,10 @@ export function mountWorkspaceMenuManageEntry(deps: {
             const workspace = workspaceOfRow(row, workspaces)
             if (workspace === undefined) return
             closeNativeMenu()
-            // The shell's directory-opening spelling: `<dir>/.` opens the
-            // folder itself with the Host's default application.
-            void workspaces.openPath(`${workspace.path}/.`).catch((error: unknown) => {
+            // Plugin-owned host route: spawns the OS file manager directly,
+            // bypassing any openPath interception (better-sidebar routes
+            // openPath into its sidebar editor, where directories error).
+            void api.openDirectory(workspace.path).catch((error: unknown) => {
               console.error('[dsh-codex-project] open directory failed:', error)
             })
           },

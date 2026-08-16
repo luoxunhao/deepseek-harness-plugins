@@ -16,7 +16,7 @@
 ## 界面概念
 
 - **管理工作区（ManageDialog）**：插件自己的小弹窗，入口 = 原生工作区「…」菜单注入的「管理工作区」项（样式与原生「重命名」项对齐）。内容：该工作区的共享子目录列表（添加/移除）、设为主工作区（父可变交接）、无配置时空状态（添加第一个子目录即建配置）。
-- **打开本地目录（OpenDirectory）**：同菜单注入的另一项——用系统默认应用打开该工作区文件夹（workspaces.openPath('<dir>/.')，复用 shell 的 Show-in-folder 通道）；仅 loopback + Host canOpenPath 时显示。
+- **打开本地目录（OpenDirectory）**：同菜单注入的另一项——用系统文件管理器打开该工作区文件夹。走**插件自有路由**（POST /codex-project/api/open-directory，host 侧 spawn explorer.exe），不走 workspaces.openPath——那是聊天文件打开通道，better-sidebar 会把它劫持进侧边栏编辑器（目录会报 "is a directory"）。
 
 ## 关系
 
