@@ -62,14 +62,16 @@ Codex 处理项目时，一个"项目"往往横跨多个目录：主代码库、
 - **权限不升级**：多根 runner 仍是 `workspace-write` 受限令牌（拒绝列表 + 空间级 SID 写授权），只是 Write ACE 覆盖配置的全部 roots；
 - **空间级 SID**：每条配置一个专属 SID（`config 目录 + record id` 摘要）——核心单根会话的 SID 无法沿着共享目录的 ACE 进入其他根，空间会话的令牌也无法使用别的根的 ACE；
 - **失败契约**：runner 任何失败输出 `codex-project-run: <detail>` 并以 127 退出，绝不以非受限方式 spawn 子进程；
-- **模型不被告知权限**：上下文提醒只列目录清单，不声明可读写——模型通过工具试错发现边界，`[sandbox: …]` 拒绝标记不变。
+- **失效根收窄（narrowing）**：配置里某个 root 目录事后被删除（被动失效）时，可写集合收窄到**现存根**——死根本身物理上已不可写，其存在性失败不阻塞其余根，也不影响任何无关会话；上下文提醒给死根加 `(⚠ directory missing)` 标注，host 日志对每个空间首次 warn 一次、之后 debug；root 目录恢复后无需重启或改配置即可重新进入可写集合（无状态重校验）；
+- **模型不被告知权限**：上下文提醒只列目录清单，不声明可读写——模型通过工具试错发现边界，`[sandbox: …]` 拒绝标记不变（缺失标注是目录事实，不是权限声明）。
 
 ### 已知边界（设计取舍）
 
 - **重叠根歧义**：同一目录同时是两条配置的根时，cwd 落在该目录的会话匹配**配置文件中靠前的那条**（可写集合随配置顺序漂移）。建议共享子目录互不重叠；
 - **standing ACE 常驻**：runner 在每个根上物化的空间 SID Write ACE 是常驻的（跨会话复用缓存，dispose 只回收私有 temp）。删除配置不会回收已打上的 ACE（孤立 ACE 无令牌携带，无害但会累积）；
 - **无只读共享**：所有根都授予读写——想"只读共享"（如只允许读 dsh 源码树）需要后续特性；
-- **提醒不重注入**：每会话一次性；恢复的会话若已有相同提醒不再折叠（带着旧文案恢复的会话会在下一条 user 消息后折叠进当前文案）。
+- **提醒不重注入**：每会话一次性；恢复的会话若已有相同提醒不再折叠（带着旧文案恢复的会话会在下一条 user 消息后折叠进当前文案）；
+- **创建/更新仍校验存在性**：通过 API 保存的配置要求 roots 全部存在（主动操作 fail loud）；只有确认式清理（`allowMissingRoots`）允许保存失效根列表。
 
 ## 配置文件
 
@@ -90,7 +92,8 @@ Codex 处理项目时，一个"项目"往往横跨多个目录：主代码库、
 
 - `roots[0]` 恒为主工作区根，其余为共享子目录；
 - **重命名迁移（0.6.0）**：首次加载时若新路径不存在而旧路径 `~/.dsh-project-space/spaces.json` 存在，自动复制过去（原文件保留为备份）。注意：配置目录变化会改变记录 SID，旧 standing ACE 变为惰性、新 ACE 在下次受限运行时重新物化；
-- 缺省文件 = 无配置 = 纯透传。
+- 缺省文件 = 无配置 = 纯透传；
+- **失效根不自动清理**：目录消失不会改写配置文件（对齐 dsh 核心"被动失效保留记录、降级显示"策略）；通过「管理工作区」弹窗或 API 的 `allowMissingRoots` 显式移除。
 
 ## HTTP API
 
@@ -99,9 +102,9 @@ Codex 处理项目时，一个"项目"往往横跨多个目录：主代码库、
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/codex-project/api/ping` | 挂载冒烟 |
-| GET | `/codex-project/api/spaces` | 共享配置列表 |
-| POST | `/codex-project/api/spaces` | 创建 `{ workspaceId?, title?, roots: [...] }` → 201 + 配置（id = UUID） |
-| PUT | `/codex-project/api/spaces/:id` | 更新 title/roots；workspaceId/title 缺省保留原值（设为主交接） |
+| GET | `/codex-project/api/spaces` | 共享配置列表（每条附只读 `missingRoots` 派生，不改写文件） |
+| POST | `/codex-project/api/spaces` | 创建 `{ workspaceId?, title?, roots: [...] }` → 201 + 配置（id = UUID）；roots 必须全部存在 |
+| PUT | `/codex-project/api/spaces/:id` | 更新 title/roots；workspaceId/title 缺省保留原值（设为主交接）；`allowMissingRoots: true` 时跳过存在性校验、现存根归一化前置，roots 全部失效则删除整条记录 |
 | DELETE | `/codex-project/api/spaces/:id` | 删除 |
 
 ## 开发
@@ -125,10 +128,11 @@ dsh plugin --profile <name> add E:/project/deepseek-harness-plugins/dsh-codex-pr
 
 ## 测试
 
-`tests/`：spaces-api CRUD + 锚点交接、space 迁移、上下文提醒（文本组成/零权限断言/折叠位置/一次性/去重）、seam 接线、fs fence、plugin 形态、client 组件（菜单注入 + 弹窗 + 指针宽限回归）。
+`tests/`：spaces-api CRUD + 锚点交接 + 失效根清理（missingRoots 派生、allowMissingRoots 移除/归一化/整条删除）、space 迁移、上下文提醒（文本组成/零权限断言/折叠位置/一次性/去重/缺失标注）、seam 接线（含死根收窄与无关死空间隔离）、fs fence（含收窄/隔离/自愈）、plugin 形态、client 组件（菜单注入 + 弹窗 + 指针宽限回归）。
 
 ## 版本记录
 
+- **0.8.0**：失效根收窄（narrowing）——配置 root 目录被删后不再 fail loud 连坐，可写集合收窄到现存根；上下文提醒标注缺失根；host 日志首见 warn；GET /spaces 暴露 missingRoots；PUT 支持确认式失效根清理（allowMissingRoots，全失效即删整条记录）；管理弹窗标注失效根并提供移除按钮；修复无关会话被死根连坐的全局故障。
 - **0.7.1**：修复「打开本地目录」——改用插件自有路由 /codex-project/api/open-directory（host 侧 spawn explorer.exe），不再走 workspaces.openPath（该方法是聊天文件打开通道，会被 better-sidebar 包装进侧边栏编辑器，目录无处安放而报 "is a directory"）。
 - **0.7.0**：「…」菜单新增「打开本地目录」（初版走 workspaces.openPath，后被 better-sidebar 拦截问题推翻）。
 - **0.6.0**：更名 `dsh-codex-project`（源自 Codex 项目处理思想）；配置路径迁移；文档重写；文档化安全边界。

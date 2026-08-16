@@ -5,9 +5,11 @@
  * Writes are atomic (temp file + rename) and serialized through a promise
  * queue so interleaved CRUD requests cannot lose updates; reads go straight
  * to the shared loader. Every mutation re-validates the whole file shape AND
- * the existence of every root — a saved space must be runnable, and a root
- * that vanishes later fails loud at confinement time (the runner and the
- * seam both refuse to narrow a multi-root grant silently).
+ * the existence of every root — a saved space must be runnable. A root that
+ * vanishes later narrows the grant at confinement time (the runner, the
+ * seam, and the fs fence all operate on surviving roots), and the confirmed
+ * removal path (`allowMissingRoots`) lets the user clean such stale roots
+ * out of the record without a fail-loud wall.
  * @module dsh-codex-project/space-store
  */
 
@@ -15,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { loadSpaces, requireCanonicalDirectory, spaceConfigPath } from './space-config.ts'
+import { loadSpaces, requireCanonicalDirectory, spaceConfigPath, tryCanonicalDirectory } from './space-config.ts'
 import type { SpaceRecord } from './space-config.ts'
 
 /** A mutation failure: the request is invalid or names a missing space. */
@@ -36,10 +38,19 @@ export interface SpaceInput {
   /** The host workspace the subspace is anchored to (optional; path-matched when absent). */
   workspaceId?: string
   roots: string[]
+  /**
+   * Confirmed stale-root cleanup: skip the existence check so vanished
+   * configured roots can be removed from the record. The saved list is
+   * normalized — surviving roots first (their relative order kept), stale
+   * ones after — so `roots[0]` is an existing directory whenever one
+   * remains, and an empty list deletes the whole record.
+   */
+  allowMissingRoots?: boolean
 }
 
 /** Validate that every root exists as a directory (shape is the API boundary's job). */
 function validateRoots(input: SpaceInput): void {
+  if (input.allowMissingRoots === true) return
   for (const root of input.roots) {
     try {
       requireCanonicalDirectory('space root', root)
@@ -47,6 +58,13 @@ function validateRoots(input: SpaceInput): void {
       throw new SpaceStoreError('invalid', error instanceof Error ? error.message : String(error))
     }
   }
+}
+
+/** Normalize a confirmed stale-root list: surviving roots first, stale after. */
+function normalizeRoots(roots: string[]): string[] {
+  const existing = roots.filter(root => tryCanonicalDirectory(root) !== undefined)
+  const stale = roots.filter(root => tryCanonicalDirectory(root) === undefined)
+  return [...existing, ...stale]
 }
 
 /** Serialize one mutation over the data file, atomically. */
@@ -93,6 +111,20 @@ export class SpaceStore {
       if (input.title !== undefined) space.title = input.title
       // The anchor is settable (the 设为主 handover); absent keeps the current one.
       if (input.workspaceId !== undefined) space.workspaceId = input.workspaceId
+      if (input.allowMissingRoots === true) {
+        const normalized = normalizeRoots(input.roots)
+        if (normalized.some(root => tryCanonicalDirectory(root) !== undefined)) {
+          space.roots = normalized
+          writeSpaces(spaces)
+          return { ...space }
+        }
+        // Every configured root is stale — the record anchors nothing real
+        // anymore; remove the whole space (the confirmed cleanup path).
+        const next = spaces.filter((candidate) => candidate.id !== id)
+        writeSpaces(next)
+        return { ...space }
+      }
+      if (input.roots.length === 0) throw new SpaceStoreError('invalid', 'space roots must not be empty')
       space.roots = input.roots
       writeSpaces(spaces)
       return { ...space }

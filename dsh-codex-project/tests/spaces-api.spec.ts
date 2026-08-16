@@ -31,6 +31,9 @@ describe('spaces API', () => {
   afterEach(() => {
     if (previousConfig === undefined) delete process.env.DSH_CODEX_PROJECT_CONFIG
     else process.env.DSH_CODEX_PROJECT_CONFIG = previousConfig
+    // The data file accumulates across tests in this file; each test starts
+    // from a clean slate so record counts stay predictable.
+    rmSync(configPath, { force: true })
   })
 
   afterAll(() => {
@@ -57,7 +60,7 @@ describe('spaces API', () => {
     expect(space.roots).toEqual([rootA, rootB])
 
     const list = await api('GET', '/codex-project/api/spaces')
-    expect(list.body).toEqual({ ok: true, spaces: [space] })
+    expect(list.body).toEqual({ ok: true, spaces: [{ ...space, missingRoots: [] }] })
 
     const updated = await api('PUT', `/codex-project/api/spaces/${space.id}`, { title: '改名', roots: [rootA] })
     expect(updated.status).toBe(200)
@@ -67,6 +70,62 @@ describe('spaces API', () => {
     expect(removed.status).toBe(200)
     const after = await api('GET', '/codex-project/api/spaces')
     expect(after.body).toEqual({ ok: true, spaces: [] })
+  })
+
+  it('reports missingRoots per record without rewriting the config file', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    const stale = join(base, 'vanished')
+    const created = await api('POST', '/codex-project/api/spaces', { roots: [rootA, stale] })
+    expect(created.status).toBe(400) // creation still fails loud on a missing root
+    // Simulate the passive case: a root that existed at save time is gone now.
+    const doomed = join(base, 'doomed')
+    mkdirSync(doomed)
+    const saved = await api('POST', '/codex-project/api/spaces', { roots: [rootA, doomed] })
+    expect(saved.status).toBe(201)
+    rmSync(doomed, { recursive: true, force: true })
+    const list = await api('GET', '/codex-project/api/spaces')
+    const record = (list.body as { spaces: { roots: string[]; missingRoots: string[] }[] }).spaces[0]!
+    expect(record.missingRoots).toEqual([doomed])
+    // The data file itself is untouched by the derivation.
+    expect(loadSpaces()[0]!.roots).toEqual([rootA, doomed])
+  })
+
+  it('removes a stale root under allowMissingRoots and promotes the first surviving root', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    // The stale root must exist at save time (creation validates existence);
+    // it vanishes afterwards, simulating the passive-invalidation case.
+    const stale = join(base, 'stale-main')
+    mkdirSync(stale)
+    const saved = await api('POST', '/codex-project/api/spaces', { roots: [stale, rootA] })
+    expect(saved.status).toBe(201)
+    const id = (saved.body as { space: { id: string } }).space.id
+    rmSync(stale, { recursive: true, force: true })
+    // The stale main root is removed; the surviving root is normalized first.
+    const cleaned = await api('PUT', `/codex-project/api/spaces/${id}`, { roots: [stale, rootA], allowMissingRoots: true })
+    expect(cleaned.status).toBe(200)
+    expect((cleaned.body as { space: { roots: string[] } }).space.roots).toEqual([rootA, stale])
+  })
+
+  it('deletes the record when allowMissingRoots empties the roots', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    const stale = join(base, 'only-stale')
+    mkdirSync(stale)
+    const saved = await api('POST', '/codex-project/api/spaces', { roots: [rootA, stale] })
+    const id = (saved.body as { space: { id: string } }).space.id
+    rmSync(stale, { recursive: true, force: true })
+    const cleaned = await api('PUT', `/codex-project/api/spaces/${id}`, { roots: [stale], allowMissingRoots: true })
+    expect(cleaned.status).toBe(200)
+    // Empty (post-normalization) roots delete the whole record.
+    const after = await api('GET', '/codex-project/api/spaces')
+    expect(after.body).toEqual({ ok: true, spaces: [] })
+  })
+
+  it('rejects empty roots without allowMissingRoots', async () => {
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    const saved = await api('POST', '/codex-project/api/spaces', { roots: [rootA, rootB] })
+    const id = (saved.body as { space: { id: string } }).space.id
+    const empty = await api('PUT', `/codex-project/api/spaces/${id}`, { roots: [] })
+    expect(empty.status).toBe(400)
   })
 
   it('persists to the data file', async () => {

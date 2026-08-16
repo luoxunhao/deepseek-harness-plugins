@@ -133,36 +133,105 @@ export function requireCanonicalDirectory(label: string, path: string): string {
 }
 
 /**
- * The space's canonical roots, failing loud on a missing configured root —
- * silently narrowing a multi-root grant to fewer roots would change
- * semantics.
+ * Canonicalize one directory without failing: a missing or non-directory
+ * path yields `undefined`. The passive-invalidation path (a configured root
+ * deleted after the record was saved) must never throw — a dead root narrows
+ * the grant to the surviving roots instead of poisoning every match.
+ * @param path - the directory to canonicalize.
+ * @returns the canonical path, or `undefined` when the path is not a directory.
  */
-export function canonicalRoots(space: SpaceRecord): string[] {
-  return space.roots.map((root) => requireCanonicalDirectory(`space ${space.id} root`, root))
+export function tryCanonicalDirectory(path: string): string | undefined {
+  try {
+    return requireCanonicalDirectory('space root', path)
+  } catch {
+    return undefined
+  }
+}
+
+/** One matched space plus its resolved root split. */
+export interface SpaceMatch {
+  /** The matched record (its `roots` stay the configured spelling). */
+  space: SpaceRecord
+  /** The canonical surviving roots — the narrowed writable grant set. */
+  existingRoots: string[]
+  /** Configured roots that are no longer existing directories. */
+  missingRoots: string[]
 }
 
 /**
- * The space whose canonical roots contain the canonical workspace, if any.
- * The first matching space wins (deterministic).
+ * Split one space's configured roots into surviving and missing sets,
+ * canonicalizing each (missing roots are reported in configured spelling).
+ * Never throws — a dead root narrows, it does not fail the match.
  */
-export function matchingSpace(spaces: SpaceRecord[], canonicalWorkspace: string): SpaceRecord | undefined {
+export function resolveSpaceRoots(space: SpaceRecord): { existingRoots: string[]; missingRoots: string[] } {
+  const existingRoots: string[] = []
+  const missingRoots: string[] = []
+  for (const root of space.roots) {
+    const canonical = tryCanonicalDirectory(root)
+    if (canonical === undefined) missingRoots.push(root)
+    else existingRoots.push(canonical)
+  }
+  return { existingRoots, missingRoots }
+}
+
+/**
+ * The space whose canonical surviving roots contain the canonical workspace,
+ * if any. The first matching space wins (deterministic). Membership is
+ * judged against SURVIVING roots only: a session cwd physically cannot sit
+ * under a deleted root, so a dead root never blocks other spaces or
+ * non-space sessions from matching (it only narrows its own space's grant).
+ */
+export function matchingSpace(spaces: SpaceRecord[], canonicalWorkspace: string): SpaceMatch | undefined {
   for (const space of spaces) {
-    if (canonicalRoots(space).includes(canonicalWorkspace)) return space
+    const roots = resolveSpaceRoots(space)
+    if (roots.existingRoots.includes(canonicalWorkspace)) return { space, ...roots }
   }
   return undefined
 }
 
 /**
  * The space owning the canonical workspace, restricted to multi-root spaces
- * (more than one configured root). Single-root spaces behave exactly like the
+ * (more than one CONFIGURED root). Single-root spaces behave exactly like the
  * core single-workspace sandbox, so every multi-root extension — the confine
  * routing, the fs fence, and the session context injection — keys off this
- * predicate and nowhere else.
+ * predicate and nowhere else. The configured count decides, so narrowing
+ * that leaves one surviving root keeps the space identity (reminder, runner
+ * branch) instead of silently degrading.
  */
-export function matchingMultiRootSpace(spaces: SpaceRecord[], canonicalWorkspace: string): SpaceRecord | undefined {
-  const space = matchingSpace(spaces, canonicalWorkspace)
-  if (space === undefined || space.roots.length <= 1) return undefined
-  return space
+export function matchingMultiRootSpace(spaces: SpaceRecord[], canonicalWorkspace: string): SpaceMatch | undefined {
+  const match = matchingSpace(spaces, canonicalWorkspace)
+  if (match === undefined || match.space.roots.length <= 1) return undefined
+  return match
+}
+
+/** The logger surface the missing-root notifier needs (host loggers qualify). */
+export interface MissingRootsLogger {
+  warn(message: string, ...args: unknown[]): void
+  debug(message: string, ...args: unknown[]): void
+}
+
+/** Spaces already warned about missing roots (one warn per space per process). */
+const warnedMissingRoots = new Set<string>()
+
+/**
+ * Surface broken space records: each space with a vanished configured root
+ * logs a warn ONCE per process, then debug on later sightings (a dead root
+ * narrows grants, so it must stay visible without spamming every call).
+ * @param logger - the host logger (seam/fs/pre-step), or undefined to skip.
+ * @param spaces - the loaded space records.
+ */
+export function logMissingRoots(logger: MissingRootsLogger | undefined, spaces: SpaceRecord[]): void {
+  if (logger === undefined) return
+  for (const space of spaces) {
+    const missing = resolveSpaceRoots(space).missingRoots
+    if (missing.length === 0) continue
+    if (warnedMissingRoots.has(space.id)) {
+      logger.debug('dsh-codex-project: space %s still has missing roots: %o', space.id, missing)
+    } else {
+      warnedMissingRoots.add(space.id)
+      logger.warn('dsh-codex-project: space %s has missing roots, grants narrowed to surviving roots: %o', space.id, missing)
+    }
+  }
 }
 
 /**

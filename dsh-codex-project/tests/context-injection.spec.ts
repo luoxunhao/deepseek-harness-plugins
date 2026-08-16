@@ -90,6 +90,13 @@ describe('composeSpaceContextText', () => {
     expect(text).not.toContain(`${rootB} (current session workspace)`)
   })
 
+  it('marks vanished roots with a missing-directory marker', () => {
+    const vanished = join(dir, 'vanished')
+    const text = composeSpaceContextText(space([rootA, vanished]), rootA)
+    expect(text).toContain(`- ${rootA} (current session workspace)`)
+    expect(text).toContain(`- ${vanished} (⚠ directory missing)`)
+  })
+
   it('never claims permissions: the model discovers the boundary by trying', () => {
     const text = composeSpaceContextText(space([rootA, rootB]), rootA)
     expect(text).not.toContain('permission')
@@ -151,6 +158,25 @@ describe('computeSpaceReminder', () => {
   it('returns undefined for a workspace outside every space', () => {
     writeConfig([space([rootA, rootB])])
     expect(computeSpaceReminder(elsewhere)).toBeUndefined()
+  })
+
+  it('keeps the space identity when narrowing leaves a single surviving root', () => {
+    writeConfig([space([rootA, join(dir, 'vanished')])])
+    const reminder = computeSpaceReminder(rootA)
+    expect(reminder).toBeDefined()
+    const text = (reminder!.content[0] as { type: 'text'; text: string } | undefined)?.text
+    expect(text).toContain(`${join(dir, 'vanished')} (⚠ directory missing)`)
+  })
+
+  it('ignores unrelated dead spaces entirely', () => {
+    writeConfig([
+      { id: 'dead', roots: [join(dir, 'dead-1'), join(dir, 'dead-2')] },
+      space([rootA, rootB]),
+    ])
+    const reminder = computeSpaceReminder(rootA)
+    expect(reminder).toBeDefined()
+    const text = (reminder!.content[0] as { type: 'text'; text: string } | undefined)?.text
+    expect(text).toContain(rootB)
   })
 
   it('returns undefined when no spaces are configured', () => {

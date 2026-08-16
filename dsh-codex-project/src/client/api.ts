@@ -13,6 +13,8 @@ export interface SpaceRecord {
   workspaceId?: string
   title?: string
   roots: string[]
+  /** Configured roots that no longer exist (read-only derivation; not persisted). */
+  missingRoots?: string[]
 }
 
 /** The editable fields of one record. */
@@ -20,6 +22,8 @@ export interface SpaceInput {
   title?: string
   workspaceId?: string
   roots: string[]
+  /** Confirmed stale-root cleanup: skip the existence check (empty roots deletes the record). */
+  allowMissingRoots?: boolean
 }
 
 /** A failed spaces call: HTTP status plus the host's error message. */

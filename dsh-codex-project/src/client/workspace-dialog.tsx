@@ -105,6 +105,17 @@ export function WorkspaceDialog(props: WorkspaceDialogProps): ReactNode {
     await api.update(own.id, { roots })
   })
 
+  /** Confirmed removal of one stale (missing) root; emptying the record deletes it. */
+  const removeStaleRoot = (root: string): Promise<void> => run(async () => {
+    if (own === null) return
+    const remaining = own.roots.filter(candidate => !samePath(candidate, root))
+    if (remaining.length === 0) {
+      await api.remove(own.id)
+      return
+    }
+    await api.update(own.id, { roots: remaining, allowMissingRoots: true })
+  })
+
   /** The parent-variable operation: hand the record's main seat to this workspace. */
   const makeMain = (): Promise<void> => run(async () => {
     if (parent === null) return
@@ -135,27 +146,40 @@ export function WorkspaceDialog(props: WorkspaceDialogProps): ReactNode {
           {records !== null && own !== null && (
             <div>
               <div className="dsh-cxp-dialog-section">共享子目录（该工作区的会话可读写这些目录）</div>
-              <div className="dsh-cxp-dialog-row">
-                <IconPlusOutline16 />
-                <span className="dsh-cxp-root-label">主工作区</span>
-                <span className="dsh-cxp-root-path">{own.roots[0]}</span>
-              </div>
-              {own.roots.slice(1).map(root => (
-                <div key={root} className="dsh-cxp-dialog-row">
-                  <span className="dsh-cxp-root-label">{basename(root)}</span>
-                  <span className="dsh-cxp-root-path">{root}</span>
-                  <span style={{ flex: 1 }} />
-                  <button
-                    type="button"
-                    className="dsh-cxp-icon-btn"
-                    title="移除共享子目录"
-                    disabled={busy}
-                    onClick={() => { void removeSubdirectory(root) }}
-                  >
-                    <IconTrashOutline16 />
-                  </button>
-                </div>
-              ))}
+              {own.roots.map((root, index) => {
+                const stale = own.missingRoots?.some(missing => samePath(missing, root)) ?? false
+                const isMain = index === 0
+                return (
+                  <div key={root} className={`dsh-cxp-dialog-row${stale ? ' dsh-cxp-root-stale' : ''}`}>
+                    <span className="dsh-cxp-root-label">
+                      {stale ? '⚠ ' : ''}{isMain ? '主工作区' : basename(root)}
+                    </span>
+                    <span className="dsh-cxp-root-path">{root}{stale ? '（目录不存在）' : ''}</span>
+                    <span style={{ flex: 1 }} />
+                    {stale ? (
+                      <button
+                        type="button"
+                        className="dsh-cxp-icon-btn"
+                        title="移除失效目录"
+                        disabled={busy}
+                        onClick={() => { void removeStaleRoot(root) }}
+                      >
+                        <IconTrashOutline16 />
+                      </button>
+                    ) : !isMain ? (
+                      <button
+                        type="button"
+                        className="dsh-cxp-icon-btn"
+                        title="移除共享子目录"
+                        disabled={busy}
+                        onClick={() => { void removeSubdirectory(root) }}
+                      >
+                        <IconTrashOutline16 />
+                      </button>
+                    ) : null}
+                  </div>
+                )
+              })}
               {own.roots.length === 1 && (
                 <div className="dsh-cxp-dialog-empty">还没有共享子目录。</div>
               )}

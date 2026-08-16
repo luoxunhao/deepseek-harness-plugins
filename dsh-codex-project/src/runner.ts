@@ -46,8 +46,10 @@
  * `{ "spaces": [{ "id", "title"?, "roots": [...] }] }` (the plugin seam will
  * point it at its data store; the prototype reads it directly). Roots and the
  * workspace are matched in canonical form; the first matching space wins.
- * A space whose configured root is missing fails loud — silently narrowing a
- * multi-root grant to fewer roots would change semantics.
+ * A space whose configured root is missing narrows to the surviving roots —
+ * the token's Write ACEs materialize only on roots that still exist, and
+ * writes to the dead root fail naturally (the directory is gone), so a dead
+ * root never poisons unrelated sessions.
  *
  * The space SID derives from the config file's canonical directory plus the
  * space id via workspaceWriteSid(), NOT from any single root: a space SID is
@@ -78,8 +80,8 @@ import {
   workspaceWriteSid,
 } from '@deepseek-ai/dsh-sandbox-windows-acl'
 
-import { canonicalRoots, loadSpaces, matchingSpace, requireCanonicalDirectory } from './space-config.ts'
-import type { SpaceRecord } from './space-config.ts'
+import { loadSpaces, matchingSpace, requireCanonicalDirectory } from './space-config.ts'
+import type { SpaceMatch } from './space-config.ts'
 import { spaceWriteSid } from './space-sid.ts'
 
 const RUNNER_SIGNATURE = 'codex-project-run'
@@ -237,20 +239,19 @@ async function runDelegation(parsed: ParsedArgs, canonicalWorkspace: string): Pr
 
 /**
  * The multi-root space branch: one space-level SID, one restricted token,
- * Write ACEs on every space root (standing) plus the private temp
- * (revocable), spawned with the caller's stdio inherited.
+ * Write ACEs on every SURVIVING space root (standing) plus the private temp
+ * (revocable), spawned with the caller's stdio inherited. A configured root
+ * that vanished is skipped — the token never grants a dead directory.
  */
 async function runSpaceBranch(
   parsed: ParsedArgs,
-  canonicalWorkspace: string,
-  space: SpaceRecord,
+  match: SpaceMatch,
 ): Promise<number> {
-  const roots = canonicalRoots(space)
   const privateTempDir = createPrivateTempDir()
   const sandbox = new AclSandbox({
-    writableDirs: roots,
+    writableDirs: match.existingRoots,
     tempDir: privateTempDir,
-    writeSid: spaceWriteSid(space),
+    writeSid: spaceWriteSid(match.space),
     tempWriteSid: tempWriteSid(privateTempDir),
     mode: 'workspace-write',
     manageDacls: true,
@@ -299,9 +300,9 @@ async function main(): Promise<number> {
   }
   // parseArgs guarantees --bind under workspace-write.
   const canonicalWorkspace = requireCanonicalDirectory('--bind workspace', parsed.workspace as string)
-  const space = matchingSpace(loadSpaces(), canonicalWorkspace)
-  if (space !== undefined && space.roots.length > 1) {
-    return runSpaceBranch(parsed, canonicalWorkspace, space)
+  const match = matchingSpace(loadSpaces(), canonicalWorkspace)
+  if (match !== undefined && match.space.roots.length > 1) {
+    return runSpaceBranch(parsed, match)
   }
   return runDelegation(parsed, canonicalWorkspace)
 }

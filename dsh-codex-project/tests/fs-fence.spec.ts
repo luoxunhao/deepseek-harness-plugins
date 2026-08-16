@@ -108,15 +108,44 @@ describe('CodexProjectFileSystem', () => {
     expect(await write(join(outside, 'file.txt'), 'danger-full-access')).toEqual({ ok: true })
   })
 
-  it('fails loud when a configured space root is missing', async () => {
+  it('narrows to surviving roots when a configured space root is missing', async () => {
     writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, join(base, 'missing')] }] }))
     process.env.DSH_CODEX_PROJECT_CONFIG = configPath
-    await expect(fs.writeText(
-      await fs.resolve(join(rootA, 'file.txt')),
-      'probe',
-      undefined,
-      undefined,
-      policy(rootA),
-    )).rejects.toThrow(/space space-1 root is not an existing directory/)
+    // The surviving root stays writable — no fail-loud on the whole space.
+    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
+    // Writing under the dead root fails naturally (the directory is gone),
+    // without the space-level "root is not an existing directory" throw.
+    const dead = await write(join(base, 'missing', 'file.txt'))
+    expect(dead.ok).toBe(false)
+  })
+
+  it('unrelated dead spaces never affect other sessions', async () => {
+    // space-1 is fully dead (all roots gone); space-2 owns rootA/rootB.
+    writeFileSync(configPath, JSON.stringify({
+      spaces: [
+        { id: 'space-1', roots: [join(base, 'missing-1'), join(base, 'missing-2')] },
+        { id: 'space-2', roots: [rootA, rootB] },
+      ],
+    }))
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
+    expect(await write(join(rootB, 'file.txt'))).toEqual({ ok: true })
+    const denied = await write(join(outside, 'file.txt'))
+    expect(denied.ok).toBe(false)
+    expect(denied.code).toBe('FS_SANDBOX_DENIED')
+  })
+
+  it('self-heals without restart: a restored root re-enters the writable set', async () => {
+    const transient = join(base, 'transient')
+    mkdirSync(transient)
+    writeFileSync(configPath, JSON.stringify({ spaces: [{ id: 'space-1', roots: [rootA, transient] }] }))
+    process.env.DSH_CODEX_PROJECT_CONFIG = configPath
+    expect(await write(join(transient, 'file.txt'))).toEqual({ ok: true })
+    // The root vanishes: the grant narrows, surviving roots stay writable.
+    rmSync(transient, { recursive: true, force: true })
+    expect(await write(join(rootA, 'file.txt'))).toEqual({ ok: true })
+    // The root comes back: the writable set re-expands without any config change.
+    mkdirSync(transient)
+    expect(await write(join(transient, 'file.txt'))).toEqual({ ok: true })
   })
 })

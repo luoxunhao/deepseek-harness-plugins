@@ -17,9 +17,10 @@
  * re-canonicalize-immediately-before-delegating TOCTOU narrowing), then
  * delegates to the parent with a `danger-full-access` policy so the parent's
  * own single-root fence is a no-op — the atomic write/edit mechanics
- * (locks, fsio) stay the parent's, verbatim. Failing loud on a configured
- * space root that vanished matches the runner and the seam: a broken space
- * must never silently narrow to fewer roots.
+ * (locks, fsio) stay the parent's, verbatim. A configured space root that
+ * vanished narrows the writable set to the surviving roots: writing the dead
+ * root fails naturally (the directory is gone) without poisoning the rest of
+ * the space or any unrelated session.
  *
  * Reads pass through untouched (every mode permits reading), exactly like
  * the core seam.
@@ -43,7 +44,8 @@ import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 
 import { isPathUnder } from './containment.ts'
-import { canonicalRoots, loadSpaces, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
+import { loadSpaces, logMissingRoots, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
+import type { MissingRootsLogger } from './space-config.ts'
 
 /** A policy that makes the parent's single-root fence a no-op. */
 const FULL_ACCESS: SandboxExecutionPolicy = {
@@ -53,14 +55,19 @@ const FULL_ACCESS: SandboxExecutionPolicy = {
 
 /**
  * The writable-root set for one workspace-write mutation: the space's
- * canonical roots (plus the core set's temp entries) when the policy's
- * workspace belongs to a multi-root space, else the core set verbatim.
+ * SURVIVING canonical roots (plus the core set's temp entries) when the
+ * policy's workspace belongs to a multi-root space, else the core set
+ * verbatim. A configured root that vanished narrows the grant to the
+ * surviving roots — writing the dead root fails naturally (the directory is
+ * gone), so failing the whole mutation would only poison unrelated sessions.
  */
-function writableRootsFor(policy: SandboxExecutionPolicy): string[] {
+function writableRootsFor(policy: SandboxExecutionPolicy, logger?: MissingRootsLogger): string[] {
   const canonicalWorkspace = requireCanonicalDirectory('session workspace', policy.workspaceRoot)
-  const space = matchingMultiRootSpace(loadSpaces(), canonicalWorkspace)
-  if (space === undefined) return writableRoots(policy)
-  return [...canonicalRoots(space), '/tmp', tmpdir()]
+  const spaces = loadSpaces()
+  logMissingRoots(logger, spaces)
+  const match = matchingMultiRootSpace(spaces, canonicalWorkspace)
+  if (match === undefined) return writableRoots(policy)
+  return [...match.existingRoots, '/tmp', tmpdir()]
 }
 
 /**
@@ -126,7 +133,7 @@ export class CodexProjectFileSystem extends SandboxedFileSystem {
       throw new FsError(`cannot write "${target.displayPath}": file access denied under read-only mode`, 'FS_SANDBOX_DENIED')
     }
     const fresh = await this.resolve(target.displayPath)
-    for (const root of writableRootsFor(policy)) {
+    for (const root of writableRootsFor(policy, this.ctx.logger)) {
       if (await isPathUnder(fresh.targetKey, root)) return fresh
     }
     throw new FsError(`cannot write "${target.displayPath}": file access denied under workspace-write mode`, 'FS_SANDBOX_DENIED')

@@ -5,9 +5,15 @@
  *
  * Routes:
  *  - GET    /codex-project/api/ping        → mount smoke
- *  - GET    /codex-project/api/spaces      → the configured shared records
+ *  - GET    /codex-project/api/spaces      → the configured shared records,
+ *                                            each with a read-only
+ *                                            `missingRoots` derivation
  *  - POST   /codex-project/api/spaces      → create `{ workspaceId?, title?, roots }`
- *  - PUT    /codex-project/api/spaces/:id  → update `{ title?, roots }` (anchor settable)
+ *  - PUT    /codex-project/api/spaces/:id  → update `{ title?, roots, allowMissingRoots? }`
+ *                                            (anchor settable; confirmed
+ *                                            stale-root cleanup under
+ *                                            allowMissingRoots, empty roots
+ *                                            deletes the record)
  *  - DELETE /codex-project/api/spaces/:id  → remove
  *
  * Errors: 400 for invalid input (bad shape, missing root directory),
@@ -17,6 +23,7 @@
 
 import type { SpaceInput, SpaceStore } from './space-store.ts'
 import { SpaceStoreError } from './space-store.ts'
+import { resolveSpaceRoots } from './space-config.ts'
 
 /** One API response: HTTP status plus a JSON body. */
 export interface ApiResponse {
@@ -47,13 +54,23 @@ function parseInput(body: unknown): SpaceInput {
     throw new SpaceStoreError('invalid', 'space workspaceId must be a non-empty string')
   }
   const roots = record.roots
-  if (!Array.isArray(roots) || roots.length === 0 || roots.some((root) => typeof root !== 'string' || root === '')) {
-    throw new SpaceStoreError('invalid', 'space roots must be a non-empty array of strings')
+  const allowMissingRoots = record.allowMissingRoots
+  if (allowMissingRoots !== undefined && typeof allowMissingRoots !== 'boolean') {
+    throw new SpaceStoreError('invalid', 'space allowMissingRoots must be a boolean')
+  }
+  if (!Array.isArray(roots) || roots.some((root) => typeof root !== 'string' || root === '')) {
+    throw new SpaceStoreError('invalid', 'space roots must be an array of strings')
+  }
+  // Empty roots only make sense as the confirmed removal of a stale root
+  // list — the store deletes the record in that case.
+  if (roots.length === 0 && allowMissingRoots !== true) {
+    throw new SpaceStoreError('invalid', 'space roots must not be empty')
   }
   return {
     ...(title === undefined ? {} : { title }),
     ...(workspaceId === undefined ? {} : { workspaceId }),
     roots: roots as string[],
+    ...(allowMissingRoots === undefined ? {} : { allowMissingRoots }),
   }
 }
 
@@ -76,7 +93,15 @@ export async function spacesApi(
       return ok({ ok: true, plugin: 'dsh-codex-project' })
     }
     if (pathname === '/codex-project/api/spaces') {
-      if (method === 'GET') return ok({ ok: true, spaces: await store.list() })
+      if (method === 'GET') {
+        // Each record is served with its read-only missingRoots derivation
+        // (the config file itself is never rewritten by a GET).
+        const spaces = (await store.list()).map((space) => ({
+          ...space,
+          missingRoots: resolveSpaceRoots(space).missingRoots,
+        }))
+        return ok({ ok: true, spaces })
+      }
       if (method === 'POST') {
         const space = await store.create(parseInput(body))
         return json(201, { ok: true, space })

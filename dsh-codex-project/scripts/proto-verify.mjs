@@ -10,8 +10,10 @@
  *   C. read-only           — no grants: every target denied
  *   D. core-seam equivalence — the delegation branch reproduces the core
  *                            seam's own grant+runner output byte-for-byte
- *   E. failure contract    — unknown arg and missing space root fail loud
- *                            with the runner signature + exit 127
+ *   E. failure contract    — unknown arg fails loud with the runner
+ *                            signature + exit 127; a missing space root
+ *                            NARROWS to the surviving roots (survivor
+ *                            writable, dead root denied) instead of failing
  *   F. exit-code mirror    — the confined child's exit code passes through
  *
  * Test directories live under the user's home (no Everyone-write
@@ -147,10 +149,15 @@ try {
     check('E unknown arg exit 127', unknown.status === 127, `status=${unknown.status}`)
     check('E unknown arg signature', /codex-project-run: unknown argument: --bogus/.test(unknown.stderr), `stderr=${unknown.stderr}`)
 
+    // A missing space root NARROWS to the surviving roots: the survivor
+    // stays writable under the space SID, the dead root is naturally denied.
     writeSpaces(spacesPath, [{ id: 'space-2', title: 'Broken', roots: [wsA, join(base, 'missing')] }])
-    const missingRoot = runWrapper(spacesEnv, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', ''], []))
-    check('E missing root exit 127', missingRoot.status === 127, `status=${missingRoot.status}`)
-    check('E missing root loud', /space space-2 root is not an existing directory/.test(missingRoot.stderr), `stderr=${missingRoot.stderr}`)
+    const missingRoot = runWrapper(spacesEnv, bwrapArgs('workspace-write', wsA, [process.execPath, '-e', PROBE], [wsA, join(base, 'missing'), outside]))
+    const lines = probeLines(missingRoot.stdout)
+    check('E missing root status 0', missingRoot.status === 0, `status=${missingRoot.status} stderr=${missingRoot.stderr}`)
+    check('E surviving root writable', lines.get(wsA) === 'WRITE-OK', `got ${lines.get(wsA)}`)
+    check('E dead root denied', lines.get(join(base, 'missing')) === 'WRITE-DENIED', `got ${lines.get(join(base, 'missing'))}`)
+    check('E outside denied', lines.get(outside) === 'WRITE-DENIED', `got ${lines.get(outside)}`)
   }
 
   // --- F. exit-code mirror (space branch) --------------------------------

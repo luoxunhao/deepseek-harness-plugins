@@ -29,7 +29,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-import { canonicalRoots, loadSpaces, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
+import { loadSpaces, matchingMultiRootSpace, requireCanonicalDirectory, tryCanonicalDirectory } from './space-config.ts'
 import type { SpaceRecord } from './space-config.ts'
 
 /** The plugin's identity in injected message sources. */
@@ -59,22 +59,26 @@ export interface FoldedSessions {
 /**
  * The model-facing `<system-reminder>` text describing one subspace: the
  * current workspace plus every root of the subspace (the host workspace root
- * first, then the extra roots), with the current one marked. Roots are shown
- * in their configured form; the current-workspace marker compares canonical
- * forms, so casing or separator differences cannot hide the current
- * workspace. The directory list only: no permission claim, no file contents.
+ * first, then the extra roots), with the current one marked and vanished
+ * roots marked `(⚠ directory missing)`. Roots are shown in their configured
+ * form; the current-workspace marker compares canonical forms, so casing or
+ * separator differences cannot hide the current workspace. The directory
+ * list only: no permission claim, no file contents — a missing-root marker
+ * is a fact about the directory, not a grant claim.
  * English copy on purpose — the reminder is model-facing prompt text.
  * @param space - the owning multi-root shared-workspace record.
  * @param canonicalWorkspace - the canonical session workspace.
  * @returns the reminder text, one `<system-reminder>` block.
  */
 export function composeSpaceContextText(space: SpaceRecord, canonicalWorkspace: string): string {
-  const canonical = canonicalRoots(space)
-  const currentIndex = canonical.indexOf(canonicalWorkspace)
-  const currentRoot = currentIndex >= 0 ? space.roots[currentIndex] : canonicalWorkspace
-  const lines = space.roots.map((root, index) => (
-    index === currentIndex ? `- ${root} (current session workspace)` : `- ${root}`
-  ))
+  const lines = space.roots.map((root) => {
+    const canonical = tryCanonicalDirectory(root)
+    const isCurrent = canonical !== undefined && canonical === canonicalWorkspace
+    const suffix = isCurrent ? ' (current session workspace)' : ''
+    const marker = canonical === undefined ? ' (⚠ directory missing)' : ''
+    return `- ${root}${suffix}${marker}`
+  })
+  const currentRoot = space.roots.find((root) => tryCanonicalDirectory(root) === canonicalWorkspace) ?? canonicalWorkspace
   return [
     REMINDER_OPEN,
     `[Workspace sharing] The current session workspace ${currentRoot} is associated with these directories:`,
@@ -111,10 +115,10 @@ export function hasIdenticalInjection(session: InjectionSession, message: UserMe
 export function computeSpaceReminder(cwd: string | undefined): UserMessage | undefined {
   if (cwd === undefined) return undefined
   const canonicalWorkspace = requireCanonicalDirectory('session workspace', cwd)
-  const space = matchingMultiRootSpace(loadSpaces(), canonicalWorkspace)
-  if (space === undefined) return undefined
+  const match = matchingMultiRootSpace(loadSpaces(), canonicalWorkspace)
+  if (match === undefined) return undefined
   return createUserMessage({
-    content: [{ type: 'text', text: composeSpaceContextText(space, canonicalWorkspace) }],
+    content: [{ type: 'text', text: composeSpaceContextText(match.space, canonicalWorkspace) }],
     source: { kind: 'plugin', plugin: PLUGIN_NAME },
   })
 }

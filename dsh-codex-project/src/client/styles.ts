@@ -169,6 +169,13 @@ const CSS = `
   opacity: 0.4;
   cursor: default;
 }
+[data-dsh-codex-project-dialog] .dsh-cxp-root-stale {
+  border: 1px solid rgba(224, 108, 108, 0.45);
+  background: rgba(224, 108, 108, 0.08);
+}
+[data-dsh-codex-project-dialog] .dsh-cxp-root-stale .dsh-cxp-root-label {
+  color: #e06c6c;
+}
 `
 
 /** Inject the styles once; a repeated call is a no-op. */

@@ -115,11 +115,28 @@ describe('wrapSandboxConfine', () => {
     dispose()
   })
 
-  it.runIf(isWin)('fails loud when a configured space root is missing', () => {
+  it.runIf(isWin)('still routes through the runner when a configured space root is missing', () => {
     writeSpaces([{ id: 'space-1', roots: [wsA, join(base, 'missing')] }])
     const { provider } = fakeSandbox()
     const dispose = wrapSandboxConfine(provider, runnerPath)
-    expect(() => provider.confine(['true'], policy(wsA))).toThrow(/space space-1 root is not an existing directory/)
+    // Narrowing: the dead root no longer fails the confine — the runner
+    // materializes grants on the surviving roots instead.
+    const result = provider.confine(['true'], policy(wsA))
+    expect(result.argv.slice(0, 2)).toEqual([process.execPath, runnerPath])
+    expect(result.argv[result.argv.indexOf('--bind') + 1]).toBe(wsA)
+    dispose()
+  })
+
+  it.runIf(isWin)('unrelated dead spaces never affect other sessions', () => {
+    writeSpaces([
+      { id: 'space-1', roots: [join(base, 'missing-1'), join(base, 'missing-2')] },
+      { id: 'space-2', roots: [wsA, wsB] },
+    ])
+    const { provider } = fakeSandbox()
+    const dispose = wrapSandboxConfine(provider, runnerPath)
+    // The fully-dead space is skipped; the workspace still matches space-2.
+    const result = provider.confine(['true'], policy(wsA))
+    expect(result.argv.slice(0, 2)).toEqual([process.execPath, runnerPath])
     dispose()
   })
 

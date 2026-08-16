@@ -23,6 +23,7 @@ import { foldSpaceContext } from './context-injection.ts'
 import { wrapSandboxConfine } from './seam.ts'
 import { openDirectoryRequest } from './open-directory.ts'
 import { migrateSpacesToSubspaces } from './space-migration.ts'
+import { loadSpaces, logMissingRoots } from './space-config.ts'
 import { SpaceStore } from './space-store.ts'
 import { spacesApi } from './spaces-api.ts'
 
@@ -115,6 +116,9 @@ export function apply(ctx: Context): void {
   ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
     const decision = await next()
     try {
+      // Surface broken records (missing roots) as a warn once per space per
+      // process; the fold itself narrows gracefully without throwing.
+      logMissingRoots(ctx.logger, loadSpaces())
       return foldSpaceContext(decision, messages, agent.session, foldedSessions)
     } catch (error) {
       ctx.logger.warn('dsh-codex-project: session context fold failed: %o', error)
@@ -129,6 +133,6 @@ export function apply(ctx: Context): void {
   const sandbox = ctx.get('sandbox')
   if (sandbox !== undefined) {
     const runnerPath = fileURLToPath(new URL('../lib/runner.js', import.meta.url))
-    ctx.effect(() => wrapSandboxConfine(sandbox, runnerPath), 'dsh-codex-project: sandbox confine routing')
+    ctx.effect(() => wrapSandboxConfine(sandbox, runnerPath, ctx.logger), 'dsh-codex-project: sandbox confine routing')
   }
 }

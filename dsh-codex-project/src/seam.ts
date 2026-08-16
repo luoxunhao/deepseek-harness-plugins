@@ -15,15 +15,17 @@
  *    lockstep), which grants a space-level SID on every root and confines
  *    under one restricted token.
  *
- * A space whose configured root is missing fails loud here (the canonical
- * match throws) — silently narrowing a multi-root grant would change
- * semantics, exactly like the runner's own guard.
+ * A space whose configured root is missing narrows to the surviving roots
+ * (the canonical match never throws): the runner materializes grants only on
+ * roots that still exist, exactly like the fs fence and the context
+ * injection — a dead root must not poison unrelated sessions.
  * @module dsh-codex-project/seam
  */
 
 import type { ConfinedArgv, SandboxPolicy, SandboxProvider } from '@deepseek-ai/dsh-sandbox'
 
-import { loadSpaces, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
+import { loadSpaces, logMissingRoots, matchingMultiRootSpace, requireCanonicalDirectory } from './space-config.ts'
+import type { MissingRootsLogger } from './space-config.ts'
 
 /** The runner's failure signature (must match `src/runner.ts`). */
 const RUNNER_SIGNATURE = 'codex-project-run: '
@@ -48,16 +50,19 @@ export function bwrapWorkspaceWriteArgs(workspaceRoot: string): string[] {
  * Wrap one sandbox provider's confine in the codex-project routing.
  * @param sandbox - the sandbox service instance (`ctx.get('sandbox')`).
  * @param runnerPath - absolute path of the built `lib/runner.js`.
+ * @param logger - the host logger (missing-root visibility; optional for tests).
  * @returns a disposer restoring the original confine (fiber teardown; HMR
  *   reloads re-apply the whole tree, so a fresh provider gets wrapped again).
  */
-export function wrapSandboxConfine(sandbox: SandboxProvider, runnerPath: string): () => void {
+export function wrapSandboxConfine(sandbox: SandboxProvider, runnerPath: string, logger?: MissingRootsLogger): () => void {
   const original = sandbox.confine
   sandbox.confine = (argv: readonly string[], policy: SandboxPolicy): ConfinedArgv => {
     if (process.platform !== 'win32') return Reflect.apply(original, sandbox, [argv, policy])
     if (policy.mode !== 'workspace-write') return Reflect.apply(original, sandbox, [argv, policy])
     const canonicalWorkspace = requireCanonicalDirectory('session workspace', policy.workspaceRoot)
-    const space = matchingMultiRootSpace(loadSpaces(), canonicalWorkspace)
+    const spaces = loadSpaces()
+    logMissingRoots(logger, spaces)
+    const space = matchingMultiRootSpace(spaces, canonicalWorkspace)
     if (space === undefined) return Reflect.apply(original, sandbox, [argv, policy])
     return {
       argv: [process.execPath, runnerPath, ...bwrapWorkspaceWriteArgs(canonicalWorkspace), '--', ...argv],

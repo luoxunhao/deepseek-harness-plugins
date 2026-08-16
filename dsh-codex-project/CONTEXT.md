@@ -11,7 +11,9 @@
 - **共享配置（SharedRecord）**：一条配置 = 一个工作区的共享集合：`{ workspaceId(主工作区), title?, roots: [主根, 共享子目录...] }`。`roots[0]` 恒为主工作区根目录。
 - **主工作区（MainWorkspace）**：一条共享配置的锚点工作区；"设置主工作区" = 把配置的主位交接给另一个工作区（父可变，原主根降为共享子目录）。
 - **共享读写（SharedAccess）**：会话的可写集合 = 命中配置的全部 roots（主根 ∪ 共享子目录），权限级别 = workspace-write 多根版（不需要 danger-full-access）。命中判定：会话 cwd（规范路径）∈ 某配置 roots 且 roots.length > 1。双向成立：子目录（若注册为工作区）里的会话同样命中该配置。**核心目的：让 dsh 跨目录执行指令、修改文件而不需要 full access。**
-- **上下文提醒（ContextReminder）**：命中配置的会话，在第一条 user 消息后折叠一条 `<system-reminder>` 目录清单（`[Workspace sharing] … associated with these directories:`，英文、零权限声明）——模型通过工具试错发现读写边界。
+- **失效根（StaleRoot）**：共享配置 roots 中指向已不存在目录的条目（保存后目录被删，被动失效）。失效根使命中空间的可写集合收窄到现存根，并在上下文提醒中标注 `(⚠ directory missing)`；不阻塞其余根、不影响无关会话、不改写配置文件（对齐 dsh 核心"被动失效保留记录、降级显示"策略）。
+- **可写集合收窄（Grant Narrowing）**：命中空间因失效根而把可写集合从配置的全部 roots 收窄为现存根的行为。收窄只对现存目录物化授权（无权限升级）；目录恢复后自动重新进入可写集合（无状态重校验）。与"创建/更新时校验 roots 全部存在（主动操作 fail loud）"互补。
+- **上下文提醒（ContextReminder）**：命中配置的会话，在第一条 user 消息后折叠一条 `<system-reminder>` 目录清单（`[Workspace sharing] … associated with these directories:`，英文、零权限声明、失效根带缺失标注）——模型通过工具试错发现读写边界。
 
 ## 界面概念
 
