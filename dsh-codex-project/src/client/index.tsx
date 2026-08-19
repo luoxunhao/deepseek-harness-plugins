@@ -1,8 +1,9 @@
 /**
  * dsh-codex-project client half: injects the 管理工作区 entry into the
  * native workspace 「…」 menu (DOM-level, self-healing) and mounts the
- * manage dialog it opens. Everything rides the native UI — no sidebar shell,
- * no panels: the plugin only adds the menu item and the dialog.
+ * manage dialog it opens. When better-sidebar is installed it ALSO registers
+ * the 项目文件夹 tab — a multi-root file tree of the project (main root +
+ * shared dirs) that opens files in the better-sidebar editor.
  *
  * The DOM-level injection follows the dsh-web-ui family precedent: the
  * workspace menu popup is React-managed native code with no extension
@@ -11,14 +12,20 @@
  * Failure policy: DOM mounting problems are logged, never thrown — an
  * external plugin must not take the GUI down.
  */
+import { createElement } from 'react'
+import { IconFolderOpenOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+
 import type { Context } from './context.ts'
 import { createSpacesApi } from './api.ts'
+import { createFileReferenceSource } from './file-reference.ts'
 import { mountWorkspaceMenuManageEntry } from './workspace-menu.ts'
+import { ProjectTab } from './project-tab.tsx'
 import { injectStyles } from './styles.ts'
 
 /** Services required before mounting (provided by the client runtime; the
- * cordis context proxy refuses undeclared service access). */
-export const inject = ['workspaces']
+ *  cordis context proxy refuses undeclared service access). `betterSidebar`
+ *  is OPTIONAL: the tab registers only when better-sidebar is installed. */
+export const inject = ['workspaces', 'betterSidebar', 'inputTriggers']
 
 /** Apply claim: a duplicated client injection must not mount a second entry. */
 let claimed = false
@@ -43,10 +50,30 @@ export function apply(ctx: Context): void {
     }
   }
   mount('styles', () => injectStyles())
+  if (ctx.inputTriggers !== undefined) {
+    mount('file-reference source', () => ctx.inputTriggers!.registerSource(createFileReferenceSource()))
+  }
   mount('workspace … menu entry', () => mountWorkspaceMenuManageEntry({
     workspaces: ctx.workspaces,
     api,
   }))
+  if (ctx.betterSidebar !== undefined) {
+    mount('项目文件夹 tab', () => ctx.betterSidebar!.registerTab({
+      id: 'codex-project:project',
+      title: () => '项目文件夹',
+      icon: createElement(IconFolderOpenOutline16, { size: 16 }),
+      order: 45,
+      single: true,
+      component: ({ ctx: tabCtx, scope }) => createElement(ProjectTab, {
+        ctx: tabCtx,
+        api,
+        betterSidebar: ctx.betterSidebar!,
+        scope,
+      }),
+    }))
+  } else {
+    console.log('[dsh-codex-project] better-sidebar not installed; skipping 项目文件夹 tab')
+  }
   ctx.effect(() => () => {
     for (const dispose of disposers.splice(0)) dispose()
   }, 'dsh-codex-project: ui mounts')

@@ -1,0 +1,16 @@
+{
+  "id": "dsh-external/dsh-skill-manager",
+  "version": "0.1.0",
+  "main": "./lib/index.js",
+  "description": "DSH 设置面板里的技能管理器：浏览技能目录、阅读技能正文，并逐个开关技能的模型/用户调用策略。",
+  "engines": {
+    "dsh": ">=0.0.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  },
+  "client": {
+    "main": "./lib/client.js"
+  }
+}

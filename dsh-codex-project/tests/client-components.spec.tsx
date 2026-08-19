@@ -69,6 +69,12 @@ function fakeApi(dirsByWorkspace: Record<string, string[]> = {}):
         return [...dirs]
       },
       openDirectory: async (path) => { openedDirs.push(path) },
+      project: async () => null,
+      listDir: async () => ({ path: '', entries: [], truncated: false }),
+      readFile: async () => ({ content: '', truncated: false }),
+      writeFile: async () => {},
+      fileUrl: (_cwd, path) => `/file?path=${encodeURIComponent(path)}`,
+      downloadUrl: (_cwd, path) => `/file?path=${encodeURIComponent(path)}&download=1`,
     },
   }
 }

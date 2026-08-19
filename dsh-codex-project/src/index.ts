@@ -116,6 +116,14 @@ export function apply(ctx: Context): void {
         return
       }
       const result = await dirsApi(store, ctx.workspaceRegistry, request.method ?? 'GET', `${url.pathname}${url.search}`, body)
+      if (result.raw !== undefined) {
+        response.writeHead(result.status, {
+          'content-type': result.contentType ?? 'application/octet-stream',
+          ...result.headers,
+        })
+        response.end(result.raw)
+        return
+      }
       writeJson(response, result.status, result.body)
     },
   }), 'dsh-codex-project: api routes')

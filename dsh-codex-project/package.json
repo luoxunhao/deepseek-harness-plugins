@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-project",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "DSH web plugin inspired by Claude Code /add-dir: a native workspace gains any number of additional writable directories (cross-drive), the model can add directories via the add-dir tool (core approval confirms), and sessions read/write them under workspace-write permission — never danger-full-access.",
   "type": "module",
   "publishConfig": {
@@ -100,12 +100,33 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-go": "^6.0.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-java": "^6.0.2",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-php": "^6.0.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/lang-xml": "^6.1.0",
+    "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
     "@deepseek-ai/dsh-fs": "0.1.0-rc.6",
     "@deepseek-ai/dsh-fs-sandbox": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sandbox": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sandbox-policy": "0.1.0-rc.6",
     "@deepseek-ai/dsh-sandbox-windows-acl": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
+    "@lezer/highlight": "^1.2.3"
   }
 }

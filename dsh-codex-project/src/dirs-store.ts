@@ -16,11 +16,11 @@ import { dirname } from 'node:path'
 import { dirsConfigDirectory, dirsConfigPath, loadWorkspaceDirs } from './dirs-config.ts'
 import type { WorkspaceDirs } from './dirs-config.ts'
 
-/** A mutation failure: invalid request or an unknown workspace. */
+/** A mutation/query failure: invalid request, unknown workspace, or a fenced path. */
 export class DirsStoreError extends Error {
   constructor(
-    /** `not-found` (unknown workspace) or `invalid` (bad shape/missing dir). */
-    public readonly code: 'not-found' | 'invalid',
+    /** `not-found` (unknown workspace), `invalid` (bad shape/missing dir), or `forbidden` (fence). */
+    public readonly code: 'not-found' | 'invalid' | 'forbidden',
     message: string,
   ) {
     super(message)

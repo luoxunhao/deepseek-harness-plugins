@@ -1,0 +1,5 @@
+# Standalone plugin workspace. deny-by-default build scripts: none of the
+# dependency tree needs a native install script for this plugin's routes.
+allowBuilds:
+  # protobufjs ships prebuilt; approved to keep the profile boot quiet.
+  protobufjs: true

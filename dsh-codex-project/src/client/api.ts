@@ -25,6 +25,34 @@ export class SpacesApiError extends Error {
   }
 }
 
+/** The project a session sees (mirror of the host's ProjectView). */
+export interface ProjectView {
+  workspaceId: string
+  /** Canonical main workspace root (== the session cwd). */
+  path: string
+  /** Surviving additional writable dirs. */
+  dirs: string[]
+  /** Configured dirs that no longer exist (stale roots). */
+  missingDirs: string[]
+}
+
+/** One project-tree row (mirror of the host's ProjectEntry). */
+export interface ProjectEntry {
+  name: string
+  path: string
+  isDir: boolean
+  hidden: boolean
+  isSymlink: boolean
+  broken: boolean
+}
+
+/** One listed directory level (mirror of the host's ProjectListing). */
+export interface ProjectListing {
+  path: string
+  entries: ProjectEntry[]
+  truncated: boolean
+}
+
 /** The dirs API surface. */
 export interface SpacesApi {
   /** All workspace records (id → { path, dirs }). */
@@ -38,6 +66,28 @@ export interface SpacesApi {
    * bypasses any openPath interception by other plugins).
    */
   openDirectory(path: string): Promise<void>
+  /**
+   * The project anchored at a session cwd (main root + shared dirs), or null
+   * when no record anchors that cwd (the 项目文件夹 tab's empty state).
+   */
+  project(cwd: string): Promise<ProjectView | null>
+  /**
+   * List one directory level of a project root (fenced to the project's roots
+   * on the host). `cwd` resolves the project; `path` is the absolute dir.
+   */
+  listDir(cwd: string, path: string): Promise<ProjectListing>
+  /**
+   * Read a text file (fenced to the project roots). `cwd` resolves the
+   * project; `path` is the absolute file. Long files are capped on the host
+   * and flagged via `truncated`.
+   */
+  readFile(cwd: string, path: string): Promise<{ content: string; truncated: boolean }>
+  /** Write a text file (fenced to the project roots), creating parents. */
+  writeFile(cwd: string, path: string, content: string): Promise<void>
+  /** Raw media URL (image/PDF in the inline preview); GET bytes. */
+  fileUrl(cwd: string, path: string): string
+  /** Raw media URL that forces a download disposition. */
+  downloadUrl(cwd: string, path: string): string
 }
 
 async function request<T>(base: string, method: string, path: string, body?: unknown): Promise<T> {
@@ -78,5 +128,22 @@ export function createSpacesApi(base = '/codex-project/api'): SpacesApi {
       return parsed.dirs
     },
     openDirectory: async (path) => { await request<{ ok: boolean }>(base, 'POST', '/open-directory', { path }) },
+    project: async (cwd) => {
+      const parsed = await request<{ project: ProjectView | null }>(base, 'GET', `/project?cwd=${enc(cwd)}`)
+      return parsed.project
+    },
+    listDir: async (cwd, path) => {
+      const parsed = await request<ProjectListing>(base, 'GET', `/list?cwd=${enc(cwd)}&path=${enc(path)}`)
+      return parsed
+    },
+    readFile: async (cwd, path) => {
+      const parsed = await request<{ content: string; truncated: boolean }>(base, 'GET', `/read?cwd=${enc(cwd)}&path=${enc(path)}`)
+      return parsed
+    },
+    writeFile: async (cwd, path, content) => {
+      await request<{ ok: boolean }>(base, 'POST', '/write', { cwd, path, content })
+    },
+    fileUrl: (cwd, path) => `${base}/file?cwd=${enc(cwd)}&path=${enc(path)}`,
+    downloadUrl: (cwd, path) => `${base}/file?cwd=${enc(cwd)}&path=${enc(path)}&download=1`,
   }
 }

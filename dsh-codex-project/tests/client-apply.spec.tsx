@@ -50,7 +50,7 @@ describe('apply', () => {
   })
 
   it('declares the workspaces service in inject', () => {
-    expect(inject).toEqual(['workspaces'])
+    expect(inject).toEqual(['workspaces', 'betterSidebar', 'inputTriggers'])
   })
 
   it('mounts the menu injection and tears it down', () => {
