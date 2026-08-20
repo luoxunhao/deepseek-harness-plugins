@@ -10,4 +10,4 @@
 # ~/.dsh/.agent-presets/liangshen on startup. No browser half.
 - insert:
     - id: liangshen
-      name: 'dsh-presets-liangshen'
+      name: '@luoxunhao/dsh-presets-liangshen'

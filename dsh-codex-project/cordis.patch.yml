@@ -23,6 +23,6 @@
   disabled: true
 - insert:
     - id: codex-project
-      name: 'dsh-codex-project'
+      name: '@luoxunhao/dsh-codex-project'
     - id: codex-project-fs
-      name: 'dsh-codex-project/fs'
+      name: '@luoxunhao/dsh-codex-project/fs'

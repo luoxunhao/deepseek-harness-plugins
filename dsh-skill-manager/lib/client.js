@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: "dsh-skill-manager",
+	id: "@luoxunhao/dsh-skill-manager",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

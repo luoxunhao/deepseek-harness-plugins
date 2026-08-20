@@ -21,7 +21,7 @@
  * surface — no skill content is created, deleted, or moved here.
  */
 import type { Context } from '@deepseek-ai/cordis';
-export declare const name = "dsh-skill-manager";
+export declare const name = "@luoxunhao/dsh-skill-manager";
 export declare const inject: string[];
 /**
  * Plugin body: register the loopback-fenced API routes. Disposal of the

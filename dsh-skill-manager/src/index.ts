@@ -34,7 +34,7 @@ import {
 } from './skills.ts'
 import type { SkillScope } from './skills.ts'
 
-export const name = 'dsh-skill-manager'
+export const name = '@luoxunhao/dsh-skill-manager'
 export const inject = ['skills', 'webServer']
 
 const API_PREFIX = '/skill-manager/api'

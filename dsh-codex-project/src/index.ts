@@ -33,7 +33,7 @@ import { defineAddDirTool } from './add-dir.ts'
 import type { AddDirToolDeps } from './add-dir.ts'
 
 /** Plugin identity for cordis.yml rows. */
-export const name = 'dsh-codex-project'
+export const name = '@luoxunhao/dsh-codex-project'
 
 /** Services required before mounting: webServer, sessions, workspace registry, tools, approval. */
 export const inject = ['webServer', 'sessions', 'workspaceRegistry', 'tools', 'approval']

@@ -81,7 +81,7 @@ function clientBundle(): UserConfig {
     plugins: [purityGatePlugin()],
     outputOptions: {
       entryFileNames: 'client.js',
-      banner: 'window.__ModuleLoader__.load({ id: "dsh-skill-manager", factory: (require) => {',
+      banner: 'window.__ModuleLoader__.load({ id: "@luoxunhao/dsh-skill-manager", factory: (require) => {',
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',
       codeSplitting: false,

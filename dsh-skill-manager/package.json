@@ -1,6 +1,6 @@
 {
-  "name": "dsh-skill-manager",
-  "version": "0.1.0",
+  "name": "@luoxunhao/dsh-skill-manager",
+  "version": "0.1.4",
   "description": "DSH web plugin: manage skills from the Settings panel — browse the merged skill catalog, read each skill's body, and toggle model/user invocation per skill.",
   "type": "module",
   "publishConfig": {

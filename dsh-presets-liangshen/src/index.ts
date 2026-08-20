@@ -69,7 +69,7 @@ export function bundledPresetsRoot(): string {
  * @param ctx - host plugin context carrying systemPrompt.
  * @param config - resolved plugin config (schema defaults applied by the loader).
  */
-export const apply = mountOnce('dsh-presets-liangshen', applyImpl)
+export const apply = mountOnce('@luoxunhao/dsh-presets-liangshen', applyImpl)
 
 function applyImpl(ctx: Context, config?: Config): void {
   const resolve = (): Config => ({
@@ -104,7 +104,7 @@ function applyImpl(ctx: Context, config?: Config): void {
     sync()
     if (resolve().announceToAgent) {
       disposeSection = ctx.systemPrompt.section({
-        name: 'plugin:dsh-presets-liangshen',
+        name: 'plugin:@luoxunhao/dsh-presets-liangshen',
         order: SECTION_ORDER,
         text: LIANGSHEN_GUIDANCE,
       })

@@ -15,4 +15,4 @@
 # with the row's `name` pointed at the built module.
 - insert:
     - id: skill-manager
-      name: 'dsh-skill-manager'
+      name: '@luoxunhao/dsh-skill-manager'

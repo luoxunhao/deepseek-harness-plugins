@@ -492,7 +492,7 @@ async function atomicWrite(path, content) {
 }
 //#endregion
 //#region src/index.ts
-const name = "dsh-skill-manager";
+const name = "@luoxunhao/dsh-skill-manager";
 const inject = ["skills", "webServer"];
 const API_PREFIX = "/skill-manager/api";
 /** Routes that can never be read-only browse targets of a trusted host. */
