@@ -121,7 +121,7 @@ pnpm --dir dsh-codex-project proto:verify  # 多根 runner 原型实证（Window
 **挂载**（profile 机制）：
 
 ```bash
-dsh plugin --profile <name> add E:/project/deepseek-harness-plugins/dsh-codex-project
+dsh plugin --profile <name> add <本仓库绝对路径或 npm spec>
 ```
 
 本地开发用 file:// 挂载 `dev.patch.yml`（`pnpm dsh web --patch <绝对路径>/dev.patch.yml`）；client 改动浏览器硬刷新即可，host 改动需重启 `dsh web`。

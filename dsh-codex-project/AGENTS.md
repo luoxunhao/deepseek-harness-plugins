@@ -8,7 +8,7 @@
 
 ## 0. 硬约束（本插件的边界）
 
-- **零写入 dsh 源码**（`E:\project\deepseek-harness` 只读）。需要 dsh 没有的能力时，优先用公开/只读 API 或插件自有路由；确实做不到，先向用户说明取舍，不改 dsh。
+- **零写入 dsh 源码**（官方仓库 <https://github.com/deepseek-ai/deepseek-harness> 的检出只读）。需要 dsh 没有的能力时，优先用公开/只读 API 或插件自有路由；确实做不到，先向用户说明取舍，不改 dsh。
 - **client 纯度门**：client bundle 只能 value-import 平台模块白名单（见 §6）；与其他插件的运行时交互一律走 cordis 服务方法调用，`import type {}` 可共享类型但不产生运行时依赖。
 - **browser bundle 无 `node:path`**：路径字符串运算必须放 `src/client/paths.ts`（`basename` / `relativePath` / `resolvePath` / `samePath`），不许 import node 内置。
 - 本插件通过 `betterSidebar.registerTab` 接入侧边栏（仅当 better-sidebar 安装时注册）；不直接操作其内部运行时符号。
@@ -108,7 +108,7 @@ pnpm --dir dsh-codex-project build       # tsc(types) + tsdown（host ESM + clie
 ## 7. 挂载与验证
 
 1. **官方通道**：`dsh plugin --profile <name> add <pkg>`（协调 `dsh.profile.bundles` 并应用 `cordis.patch.yml`）。
-2. **本地开发**：dsh 源码根目录 `pnpm dsh web --patch E:/project/deepseek-harness-plugins/dsh-codex-project/cordis.patch.yml`（绝对路径）。bundle patch 会把 `lib/fs.js` 插为 fs 提供者、禁用核心 fs-sandbox 行。
+2. **本地开发**：dsh 源码检出根目录 `pnpm dsh web --patch <本仓库绝对路径>/cordis.patch.yml`。bundle patch 会把 `lib/fs.js` 插为 fs 提供者、禁用核心 fs-sandbox 行。
 3. **热加载**：client 改动浏览器硬刷新即可；**host 改动（路由、seam、fs、runner）需重启 `dsh web`**。
 4. `pnpm plugin add` 报 `ERR_PNPM_IGNORED_BUILDS` 时，把 `<profile>/pnpm-workspace.yaml` 的 `allowBuilds` 占位符改成布尔值后重跑（见根 AGENTS.md）。
 

@@ -36,7 +36,7 @@ Plan mode is supported: phase 1 filters the assembled prompt sections down to th
 ```sh
 # Local development: mount from this repo through the patch file (absolute path).
 # Run from the dsh source tree root:
-pnpm dsh web --patch E:/project/deepseek-harness-plugins/dsh-presets-liangshen/cordis.patch.yml
+pnpm dsh web --patch <本仓库绝对路径>/cordis.patch.yml
 
 # Official channel (published): add the package to a profile via the CLI, which
 # applies the bundled cordis.patch.yml automatically.

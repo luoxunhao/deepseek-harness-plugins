@@ -35,7 +35,7 @@ preset 在参考机制之上内置了额外保护，全部在 `agent.cordis.yml`
 
 ```sh
 # 本地开发：通过 patch 文件从本仓库挂载（绝对路径），在 dsh 源码树根目录运行：
-pnpm dsh web --patch E:/project/deepseek-harness-plugins/dsh-presets-liangshen/cordis.patch.yml
+pnpm dsh web --patch <本仓库绝对路径>/cordis.patch.yml
 
 # 官方通道（已发布）：CLI 添加包到 profile，自动应用包内 cordis.patch.yml。
 dsh plugin --profile web add dsh-presets-liangshen

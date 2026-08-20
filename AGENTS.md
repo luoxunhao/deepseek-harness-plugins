@@ -1,12 +1,20 @@
 # AGENTS.md — dsh 插件开发工作区
 
-本仓库专为 DeepSeek Harness (dsh) 插件开发而设：每个插件是一个独立包，位于 dsh 源码树（`E:\project\deepseek-harness`）之外，永远作为独立包被 profile 引用，不反向侵入 dsh。
+本仓库专为 DeepSeek Harness (dsh) 插件开发而设：每个插件是一个独立包，位于 dsh 源码树（<https://github.com/deepseek-ai/deepseek-harness>）之外，永远作为独立包被 profile 引用，不反向侵入 dsh。
+
+## 本仓库的插件
+
+| 插件 | 形态 | 一句话 |
+|---|---|---|
+| [`dsh-codex-project/`](dsh-codex-project/README.md) | web 插件（host + client） | 工作区共享子目录 + 项目文件夹 tab（预览/引用）+ /read、/write、/file 路由 + `add-dir` 工具 |
+| [`dsh-presets-liangshen/`](dsh-presets-liangshen/README.md) | Agent 模式（preset）插件 | 发行「梁神模式」agent preset：两阶段锚定 + PTC Mode 切换 |
+| [`dsh-skill-manager/`](dsh-skill-manager/README.md) | web 插件（host + client） | 「设置 → 技能」面板：浏览技能目录、查看正文、切换调用策略 |
 
 ## 硬约束
 
-- **零写入 dsh 源码**：`E:\project\deepseek-harness` 只读——不得修改其包、不得提交到它的分支。
+- **零写入 dsh 源码**：dsh 官方仓库（<https://github.com/deepseek-ai/deepseek-harness>）的检出只读——不得修改其包、不得提交到它的分支。
 - **插件独立成包**：`<plugin>/` 自带 package.json（依赖 dsh 包用 `workspace:^`，经 pnpm workspace 链接到 dsh 源码树）、tsconfig、vitest、自己的检查命令（`pnpm --dir <plugin> test` / `typecheck`）。
-- **挂载只走 profile 机制**：官方通道 `dsh plugin --profile <name> add <pkg>`；本地开发用 dsh 源码根目录下的 `pnpm dsh web --patch <绝对路径>/cordis.patch.yml`。插件路径必须是绝对路径——patch 文件只贡献配置，不改 loader 的 profile 目录。
+- **挂载只走 profile 机制**：官方通道 `dsh plugin --profile <name> add <pkg>`；本地开发用 dsh 源码检出根目录下的 `pnpm dsh web --patch <绝对路径>/cordis.patch.yml`。插件路径必须是绝对路径——patch 文件只贡献配置，不改 loader 的 profile 目录。
 - 需要 dsh 没有的能力时，优先用 dsh 现成的公开/只读 API 或插件自有路由；确实做不到，先向用户说明取舍，而不是改 dsh。
 
 ## 插件是什么
@@ -29,7 +37,7 @@ export function apply(ctx: Context) {
 |---|---|---|
 | 函数 | `export function apply(ctx)`（可加 `export const name` / `export const inject`） | 默认 |
 | 对象 | `export default { name, inject, apply(ctx) }` | 打包配置时 |
-| 类 | `export default class MyService extends Service { static inject = [...]; constructor(ctx) { super(ctx, 'myService') } }` | 要向其他插件提供服务时（见 `framework/service.md`） |
+| 类 | `export default class MyService extends Service { static inject = [...]; constructor(ctx) { super(ctx, 'myService') } }` | 要向其他插件提供服务时（见 `docs/user/develop/framework/service.md`） |
 
 ## 生命周期：自动清理
 
@@ -102,7 +110,7 @@ export function apply(ctx: Context) {
 ## 挂载与验证
 
 1. **官方通道（发布）**：`dsh plugin --profile <name> add <pkg>`——CLI 协调 `dsh.profile.bundles` 并应用包内 `dsh.bundle.patch`（即 `cordis.patch.yml`）。
-2. **本地开发**：dsh 源码根目录运行 `pnpm dsh web --patch <plugin>/cordis.patch.yml`（绝对路径），打开 `http://127.0.0.1:3080` 验证。
+2. **本地开发**：dsh 源码检出根目录运行 `pnpm dsh web --patch <plugin>/cordis.patch.yml`（绝对路径），打开 `http://127.0.0.1:3080` 验证。
 3. client half 改动热加载（浏览器硬刷新即可）；host half 改动需重启 `dsh web`。
 
 ### `plugin add` 报 ERR_PNPM_IGNORED_BUILDS
@@ -121,6 +129,7 @@ pnpm ≥10 默认不执行依赖的构建脚本。profile 初始化会生成 `pn
 
 ## 参考实现
 
-- **`dsh-codex-project/`** —— 本仓库跟踪的典型插件标杆：host half（`src/index.ts`：/read、/write、/file 路由、工具）+ client half（`src/client/`：React UI + 项目文件夹 tab）+ `cordis.patch.yml` + 完整 vitest 套件。
-- **`dsh-presets-liangshen/`** —— Agent 模式（preset）插件的完整范例：两阶段引导 `tool-bootstrap.mjs` + `agent.cordis.yml` AGENT-PLANE 组合 + `src/sync.ts` 幂等同步 + `src/schema.ts` 校验 + 平台门测试。开发要点见上文「Agent 模式（preset）插件」。
-- 官方教程：`E:\project\deepseek-harness\docs\user\develop\basic\index.zh.md`（本文件核心内容的来源）、`tool.md`（工具 DSL）、`config.md`（插件配置）、`framework/service.md`（服务与依赖）。
+- **`dsh-codex-project/`** —— web 插件标杆：host half（`src/index.ts`：/read、/write、/file 路由、工具）+ client half（`src/client/`：React UI + 项目文件夹 tab）+ `cordis.patch.yml` + 完整 vitest 套件。
+- **`dsh-presets-liangshen/`** —— Agent 模式（preset）插件标杆：两阶段引导 `tool-bootstrap.mjs` + `agent.cordis.yml` AGENT-PLANE 组合 + `src/sync.ts` 幂等同步 + `src/schema.ts` 校验 + 平台门测试。开发要点见上文「Agent 模式（preset）插件」。
+- **`dsh-skill-manager/`** —— 设置面板类 web 插件标杆：host 路由 + client「设置 → 技能」分区（`dsh-client-ui-settings` slot）+ frontmatter 最小保真写（EOL 无关）+ 注册表权威/磁盘兜底 + Windows 原子写（EPERM 重试）。不变量见 `dsh-skill-manager/AGENTS.md`，领域词汇见 `dsh-skill-manager/CONTEXT.md`。
+- 官方教程（dsh 仓库 `docs/user/develop/`）：[第一个插件](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.zh.md)（本文件核心内容的来源）、[工具 DSL](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/tool.md)、[插件配置](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/config.md)、[框架 service](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/service.md)。

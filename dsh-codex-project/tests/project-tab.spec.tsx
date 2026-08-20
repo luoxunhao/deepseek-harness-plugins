@@ -185,8 +185,9 @@ describe('ProjectTab', () => {
     })
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(fake.read).toEqual([{ cwd: ROOT_A, path: `${ROOT_A}\\readme.md` }])
-    // The inline preview header shows the opened file's name.
-    expect(tab.querySelector('.dsh-cxp-preview-title')?.textContent).toContain('readme.md')
+    // Text files show the filename in the editor toolbar, not a duplicate header.
+    expect(tab.querySelector('.dsh-cxp-preview-title')).toBeNull()
+    expect(tab.querySelector('.dsh-cxp-preview-filename')?.textContent).toContain('readme.md')
   })
 
   it('keeps the inline editor host mounted and reveals it on 编辑', async () => {

@@ -11,7 +11,7 @@ dsh plugin --profile <name> add dsh-skill-manager
 本地开发用 dsh 源码根目录：
 
 ```bash
-pnpm dsh web --patch E:\project\deepseek-harness-plugins\dsh-skill-manager\cordis.patch.yml
+pnpm dsh web --patch <本仓库绝对路径>/cordis.patch.yml
 ```
 
 > host half（Node 侧）改动需重启 `dsh web`；client half（UI）改动浏览器硬刷新即可。

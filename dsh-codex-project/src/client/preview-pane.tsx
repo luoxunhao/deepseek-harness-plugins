@@ -103,6 +103,9 @@ export function PreviewPane(props: PreviewPaneProps): ReactNode {
     if (objectUrlRef.current !== null) URL.revokeObjectURL(objectUrlRef.current)
   }, [])
 
+  // Text kinds show the filename in the editor toolbar (next to 预览/编辑);
+  // image/PDF/binary have no other title bar, so keep the header for them.
+  const isText = kind === 'markdown' || kind === 'html' || kind === 'code'
   const header = (
     <div className="dsh-cxp-preview-header">
       <span className="dsh-cxp-preview-title" title={path}>{basename(path)}</span>
@@ -144,7 +147,7 @@ export function PreviewPane(props: PreviewPaneProps): ReactNode {
 
   return (
     <div className="dsh-cxp-preview-pane" data-kind={kind}>
-      {header}
+      {!isText && header}
       {body}
     </div>
   )
