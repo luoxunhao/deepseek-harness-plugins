@@ -20,18 +20,28 @@ export interface ManagedSkill {
 export interface InvocationPatch {
     enabled: boolean;
 }
+/** A workspace entry (id/path/title) for the project-level workspace dropdown. */
+export interface Workspace {
+    id: string;
+    path: string;
+    title: string;
+}
 /** One wire failure. */
 export declare class SkillManagerApiError extends Error {
     readonly status: number;
     constructor(status: number, message: string);
 }
+/** A skill scope: user-level, or one workspace's project-level (by cwd). */
+export type SkillScope = 'user' | 'project';
 /** The typed client API face exposed to the section component. */
 export declare function createSkillManagerApi(): {
-    /** List the full merged skill catalog. */
-    list(): Promise<ManagedSkill[]>;
-    /** Read one skill's instruction body. */
-    getBody(name: string): Promise<string>;
-    /** Enable/disable a skill's invocation (sets model AND user together). */
-    setInvocation(name: string, patch: InvocationPatch): Promise<ManagedSkill>;
+    /** List the skill catalog for a scope (user, or one workspace's project skills). */
+    list(scope: SkillScope, cwd?: string): Promise<ManagedSkill[]>;
+    /** List the host's registered workspaces for the project-level dropdown. */
+    listWorkspaces(): Promise<Workspace[]>;
+    /** Read one skill's instruction body for a scope. */
+    getBody(name: string, scope?: SkillScope, cwd?: string): Promise<string>;
+    /** Enable/disable a skill's invocation for a scope (sets model AND user together). */
+    setInvocation(name: string, patch: InvocationPatch, scope?: SkillScope, cwd?: string): Promise<ManagedSkill>;
 };
 export type SkillManagerApi = ReturnType<typeof createSkillManagerApi>;

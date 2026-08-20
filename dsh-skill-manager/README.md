@@ -82,4 +82,8 @@ pnpm pack --pack-destination <dir>   # 出 tarball（pnpm build 与 pack 分开�
 
 重装同版本 tarball 到真实 profile：先删 `<profile>/node_modules/dsh-skill-manager` 与 `<profile>/pnpm-lock.yaml`，再 `dsh plugin --profile <name> add file:...tgz`。
 
-验证：`GET /skill-manager/api/skills`（目录）、`GET .../<name>/body`（正文）、`PUT .../<name>/invocation { enabled }`（开关，200 后文件双键同步）。
+验证：
+- `GET /skill-manager/api/workspaces`（工作区列表，项目级下拉数据源）
+- `GET /skill-manager/api/skills?scope=user`（用户级目录）、`GET /skill-manager/api/skills?scope=project&cwd=<workspace>`（该工作区项目级目录，仅 `project-dsh`/`project-agents`）
+- `GET .../<name>/body?scope=...&cwd=...`（正文）、`PUT .../<name>/invocation?scope=...&cwd=... { enabled }`（开关，200 后文件双键同步）
+- 项目级缺 `cwd` → 400 `missing cwd for project scope`。

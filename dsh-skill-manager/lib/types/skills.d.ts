@@ -1,6 +1,27 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { SkillDefinition } from '@deepseek-ai/dsh-skill';
 import type { DiskSkill } from './user-skills.ts';
+/**
+ * Which skill scope a listing/read/write targets. `user` is the global
+ * user-scope catalog; `project` is one workspace's project-scope skills, whose
+ * registry lookup must carry the workspace `cwd`.
+ */
+export type SkillScope = {
+    readonly kind: 'user';
+} | {
+    readonly kind: 'project';
+    readonly cwd: string;
+};
+/** Injectable disk-locator seams for {@link listManagedSkills} (tests). */
+export interface SkillListDeps {
+    readonly discoverUser?: () => Promise<DiskSkill[]>;
+    readonly discoverProject?: (cwd: string) => Promise<DiskSkill[]>;
+}
+/** Injectable disk-locator seams for reads/writes (tests). */
+export interface SkillLocatorDeps {
+    readonly findUser?: (name: string) => Promise<DiskSkill | undefined>;
+    readonly findProject?: (cwd: string, name: string) => Promise<DiskSkill | undefined>;
+}
 /** One catalog row the UI renders. */
 export interface ManagedSkill {
     readonly name: string;
@@ -34,35 +55,59 @@ export declare function toManagedSkill(def: SkillDefinition): ManagedSkill;
  */
 export declare function mergeManagedSkills(registry: readonly ManagedSkill[], disk: readonly ManagedSkill[]): ManagedSkill[];
 /**
- * Assemble the full merged skill catalog as UI rows. Registry rows (the
- * canonical merged snapshot) are authoritative; user-scope disk skills the
- * registry cannot surface (project-scoped `ctx.fs` masks them) are appended.
+ * Assemble the merged skill catalog as UI rows for one scope. User scope reads
+ * the canonical no-cwd snapshot (project roots are not scanned without a
+ * cwd) plus user-scope disk skills the registry cannot surface. Project scope
+ * reads the registry with the workspace `cwd` and keeps only project-scope
+ * rows, plus project-scope disk skills the registry cannot surface.
  * @param ctx - a context with the `skills` service ready.
- * @param discoverDisk - disk-skill enumerator (injectable for tests).
+ * @param deps - optional disk-locator seams (defaults to real discovery).
  * @returns alphabetically sorted, invocation-resolved skill rows.
  */
-export declare function listManagedSkills(ctx: Context, discoverDisk?: () => Promise<DiskSkill[]>): Promise<ManagedSkill[]>;
+export declare function listManagedSkills(ctx: Context, deps?: SkillListDeps & {
+    scope?: SkillScope;
+}): Promise<ManagedSkill[]>;
 /**
  * Write one invocation policy change to a skill's own frontmatter file. The
  * single {@link InvocationPatch.enabled} flag sets model AND user invocation
- * together (both frontmatter keys are always written, in sync).
+ * together (both frontmatter keys are always written, in sync). The write
+ * target is the skill's own discovered path for the given scope: user scope
+ * resolves through `ctx.skills.get(name)`, project scope through
+ * `ctx.skills.get(name, { cwd })`, each with a disk-locator fallback.
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to edit (validated against the skill-name grammar).
  * @param patch - `{ enabled }`: true → both invocable, false → both disabled.
- * @param resolveDisk - user-disk locator (injectable for tests).
+ * @param deps - optional disk-locator seams and scope (defaults to user scope).
  * @returns the refreshed skill row after the write.
  * @throws {@link SkillWriteError} when the name is invalid, the skill is
  *   unknown, not toggleable, or its file carries no frontmatter.
  */
-export declare function setInvocation(ctx: Context, name: string, patch: InvocationPatch, resolveDisk?: (name: string) => Promise<DiskSkill | undefined>): Promise<ManagedSkill>;
+export declare function setInvocation(ctx: Context, name: string, patch: InvocationPatch, deps?: SkillLocatorDeps & {
+    scope?: SkillScope;
+}): Promise<ManagedSkill>;
 /**
- * Read one skill's instruction body. Prefers the registry-loaded definition
- * (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
- * (a project `fs` masks the user roots), falls back to reading the skill file
- * directly and stripping its frontmatter. The body is trimmed as DSH trims.
+ * Read one skill's instruction body for a scope. Prefers the registry-loaded
+ * definition (`ctx.skills.get`, with the workspace `cwd` in project scope);
+ * when the registry cannot surface a disk skill, falls back to reading the
+ * skill file directly and stripping its frontmatter. The body is trimmed as
+ * DSH trims.
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to read.
- * @param resolveDisk - user-disk locator (injectable for tests).
+ * @param deps - optional disk-locator seams and scope (defaults to user scope).
  * @returns the skill body, or `undefined` when the skill is unknown.
  */
-export declare function getSkillBody(ctx: Context, name: string, resolveDisk?: (name: string) => Promise<DiskSkill | undefined>): Promise<string | undefined>;
+export declare function getSkillBody(ctx: Context, name: string, deps?: SkillLocatorDeps & {
+    scope?: SkillScope;
+}): Promise<string | undefined>;
+/** A workspace entry surfaced by the host's workspace registry. */
+export interface WorkspaceEntry {
+    readonly id: string;
+    readonly path: string;
+    readonly title: string;
+}
+/**
+ * List the host's registered workspaces for the project-level workspace
+ * dropdown. Reads `ctx.workspaceRegistry` when present (optional dependency);
+ * an absent registry yields an empty list so the plugin still works without it.
+ */
+export declare function listWorkspaces(ctx: Context): WorkspaceEntry[];

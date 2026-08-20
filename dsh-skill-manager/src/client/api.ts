@@ -23,6 +23,13 @@ export interface InvocationPatch {
   enabled: boolean
 }
 
+/** A workspace entry (id/path/title) for the project-level workspace dropdown. */
+export interface Workspace {
+  id: string
+  path: string
+  title: string
+}
+
 /** One wire failure. */
 export class SkillManagerApiError extends Error {
   constructor(
@@ -33,28 +40,48 @@ export class SkillManagerApiError extends Error {
   }
 }
 
+/** Build the query string for a skill scope (cwd only for project scope). */
+function scopeQuery(scope: SkillScope, cwd?: string): string {
+  const params = new URLSearchParams()
+  params.set('scope', scope)
+  if (scope === 'project' && cwd !== undefined && cwd !== '') params.set('cwd', cwd)
+  const query = params.toString()
+  return query === '' ? '' : `?${query}`
+}
+
+/** A skill scope: user-level, or one workspace's project-level (by cwd). */
+export type SkillScope = 'user' | 'project'
+
 /** The typed client API face exposed to the section component. */
 export function createSkillManagerApi() {
   return {
-    /** List the full merged skill catalog. */
-    async list(): Promise<ManagedSkill[]> {
-      const res = await fetch('/skill-manager/api/skills')
+    /** List the skill catalog for a scope (user, or one workspace's project skills). */
+    async list(scope: SkillScope, cwd?: string): Promise<ManagedSkill[]> {
+      const res = await fetch(`/skill-manager/api/skills${scopeQuery(scope, cwd)}`)
       if (!res.ok) throw await apiError('list', res)
       const data = (await res.json()) as { skills: ManagedSkill[] }
       return data.skills
     },
 
-    /** Read one skill's instruction body. */
-    async getBody(name: string): Promise<string> {
-      const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/body`)
+    /** List the host's registered workspaces for the project-level dropdown. */
+    async listWorkspaces(): Promise<Workspace[]> {
+      const res = await fetch('/skill-manager/api/workspaces')
+      if (!res.ok) throw await apiError('listWorkspaces', res)
+      const data = (await res.json()) as { workspaces: Workspace[] }
+      return data.workspaces
+    },
+
+    /** Read one skill's instruction body for a scope. */
+    async getBody(name: string, scope: SkillScope = 'user', cwd?: string): Promise<string> {
+      const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/body${scopeQuery(scope, cwd)}`)
       if (!res.ok) throw await apiError('getBody', res)
       const data = (await res.json()) as { content: string }
       return data.content
     },
 
-    /** Enable/disable a skill's invocation (sets model AND user together). */
-    async setInvocation(name: string, patch: InvocationPatch): Promise<ManagedSkill> {
-      const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation`, {
+    /** Enable/disable a skill's invocation for a scope (sets model AND user together). */
+    async setInvocation(name: string, patch: InvocationPatch, scope: SkillScope = 'user', cwd?: string): Promise<ManagedSkill> {
+      const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation${scopeQuery(scope, cwd)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: patch.enabled }),

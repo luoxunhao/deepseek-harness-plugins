@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { isToggleable, listManagedSkills, setInvocation, toManagedSkill, getSkillBody, SkillWriteError } from '../src/skills.ts'
+import { isToggleable, listManagedSkills, setInvocation, toManagedSkill, getSkillBody, listWorkspaces, SkillWriteError } from '../src/skills.ts'
 import type { ManagedSkill } from '../src/skills.ts'
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -50,10 +50,10 @@ function makeFakeCtx(defs: Map<string, { path?: string; source: string }>) {
 let dir: string
 let defs: Map<string, { path?: string; source: string }>
 
-function writeSkill(name: string, frontmatter: string): string {
+function writeSkill(name: string, frontmatter: string, source = 'user-dsh'): string {
   const path = join(dir, name)
   writeFileSync(path, frontmatter)
-  defs.set(name, { path, source: 'user-dsh' })
+  defs.set(name, { path, source })
   return path
 }
 
@@ -106,7 +106,7 @@ describe('listManagedSkills', () => {
     writeSkill('b', FM('b'))
     writeSkill('a', FM('a'))
     const ctx = makeFakeCtx(defs)
-    const rows: ManagedSkill[] = await listManagedSkills(ctx, async () => [])
+    const rows: ManagedSkill[] = await listManagedSkills(ctx, { discoverUser: async () => [] })
     expect(rows.map(r => r.name)).toEqual(['a', 'b'])
   })
 
@@ -121,7 +121,7 @@ describe('listManagedSkills', () => {
       modelInvocable: true,
       userInvocable: true,
     }
-    const rows = await listManagedSkills(ctx, async () => [disk])
+    const rows = await listManagedSkills(ctx, { discoverUser: async () => [disk] })
     expect(rows.map(r => r.name)).toEqual(['a', 'disk-skill'])
     const diskRow = rows.find(r => r.name === 'disk-skill')!
     expect(diskRow.toggleable).toBe(true)
@@ -139,10 +139,38 @@ describe('listManagedSkills', () => {
       modelInvocable: false,
       userInvocable: false,
     }
-    const rows = await listManagedSkills(ctx, async () => [disk])
+    const rows = await listManagedSkills(ctx, { discoverUser: async () => [disk] })
     const row = rows.find(r => r.name === 'a')!
     expect(row.description).toBe('desc')
     expect(row.modelInvocable).toBe(true)
+  })
+
+  it('project scope lists only project-source registry rows plus project disk rows', async () => {
+    writeSkill('p', FM('p'), 'project-dsh')
+    writeSkill('u', FM('u'))
+    const ctx = makeFakeCtx(defs)
+    const disk = {
+      name: 'p-disk',
+      description: 'd',
+      source: 'project-agents' as const,
+      path: '/w/.agents/skills/p-disk.md',
+      modelInvocable: true,
+      userInvocable: true,
+    }
+    const rows = await listManagedSkills(ctx, {
+      scope: { kind: 'project', cwd: '/workspace' },
+      discoverProject: async () => [disk],
+    })
+    expect(rows.map(r => r.name)).toEqual(['p', 'p-disk'])
+    expect(rows.every(r => r.source === 'project-dsh' || r.source === 'project-agents')).toBe(true)
+  })
+
+  it('user scope never includes project-source rows', async () => {
+    writeSkill('p', FM('p'), 'project-dsh')
+    writeSkill('u', FM('u'))
+    const ctx = makeFakeCtx(defs)
+    const rows = await listManagedSkills(ctx, { discoverUser: async () => [] })
+    expect(rows.map(r => r.name)).toEqual(['u'])
   })
 })
 
@@ -150,7 +178,7 @@ describe('getSkillBody', () => {
   it('returns the registry-loaded body for a registry skill', async () => {
     writeSkill('a', FM('a'))
     const ctx = makeFakeCtx(defs)
-    const body = await getSkillBody(ctx, 'a', async () => undefined)
+    const body = await getSkillBody(ctx, 'a', { findUser: async () => undefined })
     expect(body).toBe('body')
   })
 
@@ -159,23 +187,35 @@ describe('getSkillBody', () => {
     writeFileSync(diskPath, '---\nname: disk-skill\ndescription: d\n---\n\n# Disk body\n')
     const disk = { name: 'disk-skill', path: diskPath, source: 'user-agents' as const }
     const ctx = makeFakeCtx(defs)
-    const body = await getSkillBody(ctx, 'disk-skill', async () => disk as never)
+    const body = await getSkillBody(ctx, 'disk-skill', { findUser: async () => disk as never })
     expect(body).toBe('# Disk body')
+  })
+
+  it('reads a project disk skill in project scope', async () => {
+    const diskPath = join(dir, 'p-skill')
+    writeFileSync(diskPath, '---\nname: p-skill\ndescription: d\n---\n\n# Project body\n')
+    const disk = { name: 'p-skill', path: diskPath, source: 'project-dsh' as const }
+    const ctx = makeFakeCtx(defs)
+    const body = await getSkillBody(ctx, 'p-skill', {
+      scope: { kind: 'project', cwd: '/workspace' },
+      findProject: async () => disk as never,
+    })
+    expect(body).toBe('# Project body')
   })
 
   it('returns undefined for an unknown skill with no disk fallback', async () => {
     const ctx = makeFakeCtx(defs)
-    expect(await getSkillBody(ctx, 'missing', async () => undefined)).toBeUndefined()
+    expect(await getSkillBody(ctx, 'missing', { findUser: async () => undefined })).toBeUndefined()
   })
 })
 
 describe('setInvocation', () => {
-  const noDisk = async () => undefined
+  const noUser = async () => undefined
 
   it('disabling writes BOTH keys in sync (model off, user off)', async () => {
     const path = writeSkill('review', FM('review'))
     const ctx = makeFakeCtx(defs)
-    const row = await setInvocation(ctx, 'review', { enabled: false }, noDisk)
+    const row = await setInvocation(ctx, 'review', { enabled: false }, { findUser: noUser })
     expect(row.modelInvocable).toBe(false)
     expect(row.userInvocable).toBe(false)
     const text = readFileSync(path, 'utf8')
@@ -187,7 +227,7 @@ describe('setInvocation', () => {
   it('enabling writes BOTH keys in sync (model on, user on)', async () => {
     const path = writeSkill('review', `---\nname: review\ndescription: desc\ndisable-model-invocation: true\nuser-invocable: false\n---\n\nbody\n`)
     const ctx = makeFakeCtx(defs)
-    const row = await setInvocation(ctx, 'review', { enabled: true }, noDisk)
+    const row = await setInvocation(ctx, 'review', { enabled: true }, { findUser: noUser })
     expect(row.modelInvocable).toBe(true)
     expect(row.userInvocable).toBe(true)
     const text = readFileSync(path, 'utf8')
@@ -199,13 +239,13 @@ describe('setInvocation', () => {
 
   it('rejects an invalid skill name', async () => {
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'Not A Skill!', { enabled: false }, noDisk))
+    await expect(setInvocation(ctx, 'Not A Skill!', { enabled: false }, { findUser: noUser }))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
   it('rejects an unknown skill', async () => {
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'missing', { enabled: false }, noDisk))
+    await expect(setInvocation(ctx, 'missing', { enabled: false }, { findUser: noUser }))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -214,7 +254,7 @@ describe('setInvocation', () => {
     writeFileSync(path, FM('builtin'))
     defs.set('builtin', { path, source: 'bundled' })
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'builtin', { enabled: false }, noDisk))
+    await expect(setInvocation(ctx, 'builtin', { enabled: false }, { findUser: noUser }))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -222,7 +262,7 @@ describe('setInvocation', () => {
     writeFileSync(join(dir, 'noFm'), '# no frontmatter\nbody')
     defs.set('noFm', { path: join(dir, 'noFm'), source: 'user-dsh' })
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'noFm', { enabled: false }, noDisk))
+    await expect(setInvocation(ctx, 'noFm', { enabled: false }, { findUser: noUser }))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -231,12 +271,45 @@ describe('setInvocation', () => {
     writeFileSync(diskPath, FM('disk-skill'))
     const ctx = makeFakeCtx(defs)
     const disk = { name: 'disk-skill', path: diskPath, source: 'user-agents' }
-    const row = await setInvocation(ctx, 'disk-skill', { enabled: false }, async () => disk as never)
+    const row = await setInvocation(ctx, 'disk-skill', { enabled: false }, { findUser: async () => disk as never })
     expect(row.userInvocable).toBe(false)
     expect(row.modelInvocable).toBe(false)
     expect(row.source).toBe('user-agents')
     const text = readFileSync(diskPath, 'utf8')
     expect(text).toContain('disable-model-invocation: true')
     expect(text).toContain('user-invocable: false')
+  })
+
+  it('writes a project skill the registry cannot see, in project scope', async () => {
+    const diskPath = join(dir, 'p-skill')
+    writeFileSync(diskPath, FM('p-skill'))
+    const ctx = makeFakeCtx(defs)
+    const disk = { name: 'p-skill', path: diskPath, source: 'project-dsh' }
+    const row = await setInvocation(ctx, 'p-skill', { enabled: false }, {
+      scope: { kind: 'project', cwd: '/workspace' },
+      findProject: async () => disk as never,
+    })
+    expect(row.userInvocable).toBe(false)
+    expect(row.modelInvocable).toBe(false)
+    expect(row.source).toBe('project-dsh')
+    const text = readFileSync(diskPath, 'utf8')
+    expect(text).toContain('disable-model-invocation: true')
+    expect(text).toContain('user-invocable: false')
+  })
+})
+
+describe('listWorkspaces', () => {
+  it('maps the workspace registry to id/path/title entries', () => {
+    const ctx = {
+      get: (key: string) => key === 'workspaceRegistry'
+        ? { list: () => [{ id: 'w1', path: '/a/b', title: 'b' }] }
+        : undefined,
+    } as unknown as Context
+    expect(listWorkspaces(ctx)).toEqual([{ id: 'w1', path: '/a/b', title: 'b' }])
+  })
+
+  it('returns an empty list when the workspace registry is absent', () => {
+    const ctx = { get: () => undefined } as unknown as Context
+    expect(listWorkspaces(ctx)).toEqual([])
   })
 })

@@ -8,6 +8,7 @@ export interface SkillManagerSectionInjected {
 /** Full section component props (runtime + owner + injected face). */
 export type SkillManagerSectionProps = PropsRuntime<'settings.section'> & InjectFace<SkillManagerSectionInjected>;
 /**
- * The section body: catalog header with a manual refresh plus the skill rows.
+ * The section body: a user/project tab switcher, a workspace dropdown for the
+ * project tab, a refresh action, and the skill rows for the active scope.
  */
 export declare function SkillsSection(props: SkillManagerSectionProps): ReactNode;

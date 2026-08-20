@@ -5,16 +5,20 @@
  * the merged skill catalog and write per-skill invocation policy back to the
  * skill's own frontmatter file:
  *
- *   GET  /skill-manager/api/skills                       → { skills }
- *   GET  /skill-manager/api/skills/:name/body            → { content }
- *   PUT  /skill-manager/api/skills/:name/invocation      → { skill }
- *        body: { modelInvocable?, userInvocable? }
+ *   GET  /skill-manager/api/skills?scope=user|project&cwd=<dir>   → { skills }
+ *   GET  /skill-manager/api/workspaces                             → { workspaces }
+ *   GET  /skill-manager/api/skills/:name/body?scope=&cwd=          → { content }
+ *   PUT  /skill-manager/api/skills/:name/invocation?scope=&cwd=    → { skill }
+ *        body: { enabled }
  *
+ * `scope` selects user-level vs one workspace's project-level skills; `cwd`
+ * (the workspace directory) is required for project scope and is the only
+ * client-supplied path — it is never a write target, only a lookup scope.
  * Reads ride the public `ctx.skills` read API (snapshot + get). Writes accept
  * only a skill NAME from the client; the target path is resolved server-side
- * from `ctx.skills.get(name).path`, so a client can never direct a write to an
- * arbitrary location. Everything is a pure catalog/browse/edit surface — no
- * skill content is created, deleted, or moved here.
+ * from `ctx.skills.get(name, { cwd }).path`, so a client can never direct a
+ * write to an arbitrary location. Everything is a pure catalog/browse/edit
+ * surface — no skill content is created, deleted, or moved here.
  */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "dsh-skill-manager";

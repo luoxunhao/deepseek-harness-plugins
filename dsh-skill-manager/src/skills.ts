@@ -17,11 +17,40 @@ import { isModelInvocable, isSkillName, isUserInvocable } from '@deepseek-ai/dsh
 import type { SkillDefinition } from '@deepseek-ai/dsh-skill'
 import { applyFrontmatterPatch, stripFrontmatterBody } from './frontmatter.ts'
 import type { FrontmatterPatch } from './frontmatter.ts'
-import { discoverUserSkills, findDiskSkill, parseDiskSkillFile } from './user-skills.ts'
+import { discoverProjectSkills, discoverUserSkills, findDiskSkill, findProjectDiskSkill, parseDiskSkillFile } from './user-skills.ts'
 import type { DiskSkill } from './user-skills.ts'
 
 /** Skill sources that must never be written by this plugin (no disk file of ours). */
 const NON_TOGGLEABLE_SOURCES: readonly SkillDefinition['source'][] = ['bundled', 'runtime']
+
+/** Skill sources that belong to a workspace's project scope. */
+const PROJECT_SOURCES: readonly SkillDefinition['source'][] = ['project-dsh', 'project-agents']
+
+/** Whether a source is a project-scope bucket. */
+function isProjectSource(source: SkillDefinition['source']): boolean {
+  return PROJECT_SOURCES.includes(source)
+}
+
+/**
+ * Which skill scope a listing/read/write targets. `user` is the global
+ * user-scope catalog; `project` is one workspace's project-scope skills, whose
+ * registry lookup must carry the workspace `cwd`.
+ */
+export type SkillScope =
+  | { readonly kind: 'user' }
+  | { readonly kind: 'project'; readonly cwd: string }
+
+/** Injectable disk-locator seams for {@link listManagedSkills} (tests). */
+export interface SkillListDeps {
+  readonly discoverUser?: () => Promise<DiskSkill[]>
+  readonly discoverProject?: (cwd: string) => Promise<DiskSkill[]>
+}
+
+/** Injectable disk-locator seams for reads/writes (tests). */
+export interface SkillLocatorDeps {
+  readonly findUser?: (name: string) => Promise<DiskSkill | undefined>
+  readonly findProject?: (cwd: string, name: string) => Promise<DiskSkill | undefined>
+}
 
 /** One catalog row the UI renders. */
 export interface ManagedSkill {
@@ -100,27 +129,46 @@ export function mergeManagedSkills(registry: readonly ManagedSkill[], disk: read
 }
 
 /**
- * Assemble the full merged skill catalog as UI rows. Registry rows (the
- * canonical merged snapshot) are authoritative; user-scope disk skills the
- * registry cannot surface (project-scoped `ctx.fs` masks them) are appended.
+ * Assemble the merged skill catalog as UI rows for one scope. User scope reads
+ * the canonical no-cwd snapshot (project roots are not scanned without a
+ * cwd) plus user-scope disk skills the registry cannot surface. Project scope
+ * reads the registry with the workspace `cwd` and keeps only project-scope
+ * rows, plus project-scope disk skills the registry cannot surface.
  * @param ctx - a context with the `skills` service ready.
- * @param discoverDisk - disk-skill enumerator (injectable for tests).
+ * @param deps - optional disk-locator seams (defaults to real discovery).
  * @returns alphabetically sorted, invocation-resolved skill rows.
  */
 export async function listManagedSkills(
   ctx: Context,
-  discoverDisk: () => Promise<DiskSkill[]> = discoverUserSkills,
+  deps: SkillListDeps & { scope?: SkillScope } = {},
 ): Promise<ManagedSkill[]> {
-  const { skills } = await ctx.skills.snapshot()
+  const discoverUser = deps.discoverUser ?? discoverUserSkills
+  const discoverProject = deps.discoverProject ?? discoverProjectSkills
+  const scope = deps.scope ?? { kind: 'user' }
+
+  const summary = await (scope.kind === 'project'
+    ? ctx.skills.snapshot({ cwd: scope.cwd })
+    : ctx.skills.snapshot())
+
   const rows: ManagedSkill[] = []
-  for (const summary of skills) {
-    if (!isSkillName(summary.name)) continue
-    const def = await ctx.skills.get(summary.name)
+  for (const entry of summary.skills) {
+    if (!isSkillName(entry.name)) continue
+    const def = await (scope.kind === 'project'
+      ? ctx.skills.get(entry.name, { cwd: scope.cwd })
+      : ctx.skills.get(entry.name))
     if (def === undefined) continue
+    if (scope.kind === 'project' && !isProjectSource(def.source)) continue
+    if (scope.kind === 'user' && isProjectSource(def.source)) continue
     rows.push(toManagedSkill(def))
   }
-  const diskRows = (await discoverDisk()).map(diskToManagedSkill)
-  return mergeManagedSkills(rows, diskRows)
+
+  const diskRows = (scope.kind === 'project'
+    ? await discoverProject(scope.cwd)
+    : await discoverUser()).map(diskToManagedSkill)
+  const merged = mergeManagedSkills(rows, diskRows)
+  return scope.kind === 'project'
+    ? merged.filter((row) => isProjectSource(row.source))
+    : merged.filter((row) => !isProjectSource(row.source))
 }
 
 /**
@@ -140,11 +188,14 @@ function toFrontmatterPatch(patch: InvocationPatch): FrontmatterPatch {
 /**
  * Write one invocation policy change to a skill's own frontmatter file. The
  * single {@link InvocationPatch.enabled} flag sets model AND user invocation
- * together (both frontmatter keys are always written, in sync).
+ * together (both frontmatter keys are always written, in sync). The write
+ * target is the skill's own discovered path for the given scope: user scope
+ * resolves through `ctx.skills.get(name)`, project scope through
+ * `ctx.skills.get(name, { cwd })`, each with a disk-locator fallback.
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to edit (validated against the skill-name grammar).
  * @param patch - `{ enabled }`: true → both invocable, false → both disabled.
- * @param resolveDisk - user-disk locator (injectable for tests).
+ * @param deps - optional disk-locator seams and scope (defaults to user scope).
  * @returns the refreshed skill row after the write.
  * @throws {@link SkillWriteError} when the name is invalid, the skill is
  *   unknown, not toggleable, or its file carries no frontmatter.
@@ -153,12 +204,17 @@ export async function setInvocation(
   ctx: Context,
   name: string,
   patch: InvocationPatch,
-  resolveDisk: (name: string) => Promise<DiskSkill | undefined> = findDiskSkill,
+  deps: SkillLocatorDeps & { scope?: SkillScope } = {},
 ): Promise<ManagedSkill> {
+  const findUser = deps.findUser ?? findDiskSkill
+  const findProject = deps.findProject ?? findProjectDiskSkill
+  const scope = deps.scope ?? { kind: 'user' }
   if (!isSkillName(name)) {
     throw new SkillWriteError(`invalid skill name: ${name}`)
   }
-  const def = await ctx.skills.get(name)
+  const def = await (scope.kind === 'project'
+    ? ctx.skills.get(name, { cwd: scope.cwd })
+    : ctx.skills.get(name))
   if (def !== undefined && isToggleable(def)) {
     const path = def.path as string
     const raw = await readFile(path, 'utf8')
@@ -167,13 +223,17 @@ export async function setInvocation(
       throw new SkillWriteError(`skill file has no frontmatter block: ${path}`)
     }
     await atomicWrite(path, next)
-    const updated = await ctx.skills.get(name)
+    const updated = await (scope.kind === 'project'
+      ? ctx.skills.get(name, { cwd: scope.cwd })
+      : ctx.skills.get(name))
     if (updated === undefined) {
       throw new SkillWriteError(`skill vanished after write: ${name}`)
     }
     return toManagedSkill(updated)
   }
-  const disk = await resolveDisk(name)
+  const disk = scope.kind === 'project'
+    ? await findProject(scope.cwd, name)
+    : await findUser(name)
   if (disk !== undefined) {
     const raw = await readFile(disk.path, 'utf8')
     const next = applyFrontmatterPatch(raw, toFrontmatterPatch(patch))
@@ -194,27 +254,59 @@ export async function setInvocation(
 }
 
 /**
- * Read one skill's instruction body. Prefers the registry-loaded definition
- * (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
- * (a project `fs` masks the user roots), falls back to reading the skill file
- * directly and stripping its frontmatter. The body is trimmed as DSH trims.
+ * Read one skill's instruction body for a scope. Prefers the registry-loaded
+ * definition (`ctx.skills.get`, with the workspace `cwd` in project scope);
+ * when the registry cannot surface a disk skill, falls back to reading the
+ * skill file directly and stripping its frontmatter. The body is trimmed as
+ * DSH trims.
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to read.
- * @param resolveDisk - user-disk locator (injectable for tests).
+ * @param deps - optional disk-locator seams and scope (defaults to user scope).
  * @returns the skill body, or `undefined` when the skill is unknown.
  */
 export async function getSkillBody(
   ctx: Context,
   name: string,
-  resolveDisk: (name: string) => Promise<DiskSkill | undefined> = findDiskSkill,
+  deps: SkillLocatorDeps & { scope?: SkillScope } = {},
 ): Promise<string | undefined> {
+  const findUser = deps.findUser ?? findDiskSkill
+  const findProject = deps.findProject ?? findProjectDiskSkill
+  const scope = deps.scope ?? { kind: 'user' }
   if (!isSkillName(name)) return undefined
-  const def = await ctx.skills.get(name)
+  const def = await (scope.kind === 'project'
+    ? ctx.skills.get(name, { cwd: scope.cwd })
+    : ctx.skills.get(name))
   if (def !== undefined) return def.content
-  const disk = await resolveDisk(name)
+  const disk = scope.kind === 'project'
+    ? await findProject(scope.cwd, name)
+    : await findUser(name)
   if (disk === undefined) return undefined
   const body = stripFrontmatterBody(await readFile(disk.path, 'utf8'))
   return body?.trim()
+}
+
+/** A workspace entry surfaced by the host's workspace registry. */
+export interface WorkspaceEntry {
+  readonly id: string
+  readonly path: string
+  readonly title: string
+}
+
+/**
+ * List the host's registered workspaces for the project-level workspace
+ * dropdown. Reads `ctx.workspaceRegistry` when present (optional dependency);
+ * an absent registry yields an empty list so the plugin still works without it.
+ */
+export function listWorkspaces(ctx: Context): WorkspaceEntry[] {
+  const registry = typeof ctx.get === 'function'
+    ? ctx.get('workspaceRegistry')
+    : undefined
+  if (registry === undefined || typeof registry.list !== 'function') return []
+  return registry.list().map((workspace: { id: string; path: string; title: string }) => ({
+    id: workspace.id,
+    path: workspace.path,
+    title: workspace.title,
+  }))
 }
 
 /**

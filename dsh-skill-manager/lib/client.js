@@ -36,7 +36,13 @@ window.__ModuleLoader__.load({
 			viewBody: "查看正文",
 			hideBody: "收起正文",
 			bodyLoadFailed: "正文加载失败",
-			toggles: "调用策略"
+			toggles: "调用策略",
+			userTab: "用户级",
+			projectTab: "项目级",
+			workspace: "工作区",
+			selectWorkspace: "选择工作区",
+			noWorkspaces: "没有可用的工作区",
+			projectEmpty: "当前工作区没有项目级技能"
 		};
 		/** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 		const en = {
@@ -58,7 +64,13 @@ window.__ModuleLoader__.load({
 			viewBody: "View body",
 			hideBody: "Hide body",
 			bodyLoadFailed: "Failed to load body",
-			toggles: "Invocation policy"
+			toggles: "Invocation policy",
+			userTab: "User-level",
+			projectTab: "Project-level",
+			workspace: "Workspace",
+			selectWorkspace: "Select workspace",
+			noWorkspaces: "No workspaces available",
+			projectEmpty: "This workspace has no project-level skills"
 		};
 		/**
 		* The dictionary namespace this plugin owns in the DSH locale registry.
@@ -192,8 +204,37 @@ window.__ModuleLoader__.load({
 			alignItems: "center",
 			justifyContent: "space-between"
 		};
+		const tabs = {
+			display: "flex",
+			gap: "6px",
+			borderBottom: "1px solid var(--dsw-alias-border-base, #e2e2e8)",
+			paddingBottom: "6px"
+		};
+		const tab = {
+			background: "none",
+			border: "none",
+			padding: "4px 10px",
+			borderRadius: "8px",
+			cursor: "pointer",
+			fontSize: "13px",
+			color: "var(--dsw-alias-text-muted, #6b6b76)"
+		};
+		const tabActive = {
+			...tab,
+			color: "var(--dsw-accent, #2563eb)",
+			background: "var(--dsw-accent-soft, rgba(37,99,235,0.12))",
+			fontWeight: 600
+		};
+		const select = {
+			padding: "4px 8px",
+			borderRadius: "8px",
+			border: "1px solid var(--dsw-alias-border-base, #e2e2e8)",
+			fontSize: "13px",
+			background: "var(--dsw-alias-bg-layer-1, #ffffff)",
+			color: "inherit"
+		};
 		/** One rendered catalog row. */
-		function SkillRow({ skill, api, onChange }) {
+		function SkillRow({ skill, api, scope, cwd, onChange }) {
 			const [expanded, setExpanded] = (0, react.useState)(false);
 			const [body, setBody] = (0, react.useState)(null);
 			const [bodyError, setBodyError] = (0, react.useState)(null);
@@ -206,16 +247,18 @@ window.__ModuleLoader__.load({
 				setExpanded(true);
 				if (body !== null) return;
 				setBodyError(null);
-				api.getBody(skill.name).then(setBody).catch((error) => setBodyError(error instanceof Error ? error.message : String(error)));
+				api.getBody(skill.name, scope, cwd).then(setBody).catch((error) => setBodyError(error instanceof Error ? error.message : String(error)));
 			}, [
 				expanded,
 				body,
 				api,
-				skill.name
+				skill.name,
+				scope,
+				cwd
 			]);
 			const onToggle = (0, react.useCallback)((enabled) => {
 				setPending({ enabled });
-				api.setInvocation(skill.name, { enabled }).then((next) => {
+				api.setInvocation(skill.name, { enabled }, scope, cwd).then((next) => {
 					setPending({});
 					onChange(next);
 				}).catch(() => {
@@ -225,7 +268,9 @@ window.__ModuleLoader__.load({
 			}, [
 				api,
 				skill.name,
-				onChange
+				onChange,
+				scope,
+				cwd
 			]);
 			const enabled = skill.modelInvocable && skill.userInvocable;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -306,25 +351,106 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
-		* The section body: catalog header with a manual refresh plus the skill rows.
+		* The section body: a user/project tab switcher, a workspace dropdown for the
+		* project tab, a refresh action, and the skill rows for the active scope.
 		*/
 		function SkillsSection(props) {
 			const { api } = props;
+			const [scope, setScope] = (0, react.useState)("user");
+			const [workspaces, setWorkspaces] = (0, react.useState)([]);
+			const [selectedWsId, setSelectedWsId] = (0, react.useState)(null);
 			const [skills, setSkills] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
 			const [pending, setPending] = (0, react.useState)(false);
-			const load = (0, react.useCallback)(() => {
+			const selectedWs = workspaces.find((ws) => ws.id === selectedWsId);
+			const load = (0, react.useCallback)((target, ws) => {
 				setError(null);
 				setPending(true);
-				api.list().then(setSkills).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setPending(false));
+				if (target === "project" && ws === void 0) {
+					setSkills([]);
+					setPending(false);
+					return;
+				}
+				api.list(target, target === "project" ? ws?.path : void 0).then(setSkills).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setPending(false));
 			}, [api]);
 			(0, react.useEffect)(() => {
-				load();
-			}, [load]);
+				api.listWorkspaces().then((list) => {
+					setWorkspaces(list);
+					if (list.length > 0) setSelectedWsId(list[0].id);
+				}).catch(() => setWorkspaces([]));
+				load("user");
+			}, [api, load]);
+			const switchScope = (0, react.useCallback)((next) => {
+				setScope(next);
+				if (next === "project") load("project", workspaces.find((ws) => ws.id === selectedWsId));
+				else load("user");
+			}, [
+				load,
+				workspaces,
+				selectedWsId
+			]);
+			const onWorkspaceChange = (0, react.useCallback)((id) => {
+				setSelectedWsId(id);
+				load("project", workspaces.find((ws) => ws.id === id));
+			}, [load, workspaces]);
+			const refresh = (0, react.useCallback)(() => {
+				if (scope === "project") load("project", workspaces.find((ws) => ws.id === selectedWsId));
+				else load("user");
+			}, [
+				scope,
+				load,
+				workspaces,
+				selectedWsId
+			]);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 				style: card,
 				children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: tabs,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: scope === "user" ? tabActive : tab,
+							onClick: () => switchScope("user"),
+							children: t("userTab")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: scope === "project" ? tabActive : tab,
+							onClick: () => switchScope("project"),
+							children: t("projectTab")
+						})]
+					}),
+					scope === "project" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: refreshRow,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+							style: {
+								...meta,
+								display: "flex",
+								alignItems: "center",
+								gap: "6px"
+							},
+							children: [t("workspace"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+								style: select,
+								value: selectedWsId ?? "",
+								onChange: (e) => onWorkspaceChange(e.target.value),
+								children: workspaces.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+									value: "",
+									children: t("noWorkspaces")
+								}) : workspaces.map((ws) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("option", {
+									value: ws.id,
+									children: [
+										ws.title,
+										" — ",
+										ws.path
+									]
+								}, ws.id))
+							})]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: linkButton,
+							onClick: refresh,
+							children: pending ? t("loading") : t("refresh")
+						})]
+					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: refreshRow,
 						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 							style: meta,
@@ -332,7 +458,7 @@ window.__ModuleLoader__.load({
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
 							style: linkButton,
-							onClick: load,
+							onClick: refresh,
 							children: pending ? t("loading") : t("refresh")
 						})]
 					}),
@@ -344,9 +470,9 @@ window.__ModuleLoader__.load({
 						style: meta,
 						children: t("loading")
 					}) : null,
-					skills !== null && skills.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					skills !== null && skills.length === 0 && error === null ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: meta,
-						children: t("empty")
+						children: scope === "project" ? t("projectEmpty") : t("empty")
 					}) : null,
 					skills === null ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: {
@@ -357,6 +483,8 @@ window.__ModuleLoader__.load({
 						children: skills.map((skill) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SkillRow, {
 							skill,
 							api,
+							scope,
+							cwd: scope === "project" ? selectedWs?.path : void 0,
 							onChange: (next) => setSkills((prev) => prev?.map((row) => row.name === next.name ? next : row) ?? null)
 						}, skill.name))
 					})
@@ -373,24 +501,38 @@ window.__ModuleLoader__.load({
 				this.status = status;
 			}
 		};
+		/** Build the query string for a skill scope (cwd only for project scope). */
+		function scopeQuery(scope, cwd) {
+			const params = new URLSearchParams();
+			params.set("scope", scope);
+			if (scope === "project" && cwd !== void 0 && cwd !== "") params.set("cwd", cwd);
+			const query = params.toString();
+			return query === "" ? "" : `?${query}`;
+		}
 		/** The typed client API face exposed to the section component. */
 		function createSkillManagerApi() {
 			return {
-				/** List the full merged skill catalog. */
-				async list() {
-					const res = await fetch("/skill-manager/api/skills");
+				/** List the skill catalog for a scope (user, or one workspace's project skills). */
+				async list(scope, cwd) {
+					const res = await fetch(`/skill-manager/api/skills${scopeQuery(scope, cwd)}`);
 					if (!res.ok) throw await apiError("list", res);
 					return (await res.json()).skills;
 				},
-				/** Read one skill's instruction body. */
-				async getBody(name) {
-					const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/body`);
+				/** List the host's registered workspaces for the project-level dropdown. */
+				async listWorkspaces() {
+					const res = await fetch("/skill-manager/api/workspaces");
+					if (!res.ok) throw await apiError("listWorkspaces", res);
+					return (await res.json()).workspaces;
+				},
+				/** Read one skill's instruction body for a scope. */
+				async getBody(name, scope = "user", cwd) {
+					const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/body${scopeQuery(scope, cwd)}`);
 					if (!res.ok) throw await apiError("getBody", res);
 					return (await res.json()).content;
 				},
-				/** Enable/disable a skill's invocation (sets model AND user together). */
-				async setInvocation(name, patch) {
-					const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation`, {
+				/** Enable/disable a skill's invocation for a scope (sets model AND user together). */
+				async setInvocation(name, patch, scope = "user", cwd) {
+					const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation${scopeQuery(scope, cwd)}`, {
 						method: "PUT",
 						headers: { "content-type": "application/json" },
 						body: JSON.stringify({ enabled: patch.enabled })

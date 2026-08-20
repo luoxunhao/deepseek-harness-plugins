@@ -29,6 +29,12 @@ export const zh = {
   hideBody: '收起正文',
   bodyLoadFailed: '正文加载失败',
   toggles: '调用策略',
+  userTab: '用户级',
+  projectTab: '项目级',
+  workspace: '工作区',
+  selectWorkspace: '选择工作区',
+  noWorkspaces: '没有可用的工作区',
+  projectEmpty: '当前工作区没有项目级技能',
 } as const
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -52,6 +58,12 @@ export const en: Record<keyof typeof zh, string> = {
   hideBody: 'Hide body',
   bodyLoadFailed: 'Failed to load body',
   toggles: 'Invocation policy',
+  userTab: 'User-level',
+  projectTab: 'Project-level',
+  workspace: 'Workspace',
+  selectWorkspace: 'Select workspace',
+  noWorkspaces: 'No workspaces available',
+  projectEmpty: 'This workspace has no project-level skills',
 }
 
 /**

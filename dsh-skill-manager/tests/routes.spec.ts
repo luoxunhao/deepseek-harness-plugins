@@ -11,6 +11,10 @@ vi.mock('../src/user-skills.ts', () => ({
   parseDiskSkillFile: (raw: string, path: string, source: string) => ({ name: 'x', description: 'd', source, path, modelInvocable: true, userInvocable: true }),
   discoverUserSkills: async () => [],
   findDiskSkill: async () => undefined,
+  findProjectRoot: async (cwd: string) => cwd,
+  projectSkillRoots: async (cwd: string) => [],
+  discoverProjectSkills: async () => [],
+  findProjectDiskSkill: async () => undefined,
 }))
 // Type-only: pulls the webServer service's Context merge (ctx.webServer).
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -27,6 +31,7 @@ function miniCtx(
     skills,
     webServer,
     logger,
+    get: () => undefined,
     effect: (fn: () => unknown) => {
       const disposer = fn() as (() => void) | undefined
       return () => disposer?.()
@@ -199,5 +204,48 @@ describe('host routes', () => {
     apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
     const { out } = await invoke(routes[0]!.handler, fakeReq('GET', '/skill-manager/api/nope'))
     expect(out.status).toBe(404)
+  })
+
+  it('serves project-scope skills on GET /skill-manager/api/skills?scope=project&cwd=...', async () => {
+    writeSkill('project-skill', 'project-dsh')
+    writeSkill('user-skill')
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const { out, body } = await invoke(routes[0]!.handler, fakeReq('GET', '/skill-manager/api/skills?scope=project&cwd=%2Fworkspace'))
+    expect(out.status).toBe(200)
+    const skills = body.skills as Array<{ name: string }>
+    expect(skills.map(s => s.name)).toEqual(['project-skill'])
+  })
+
+  it('rejects project scope without a cwd', async () => {
+    writeSkill('project-skill', 'project-dsh')
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const { out } = await invoke(routes[0]!.handler, fakeReq('GET', '/skill-manager/api/skills?scope=project'))
+    expect(out.status).toBe(400)
+  })
+
+  it('writes a project-scope skill on PUT with scope=project&cwd=...', async () => {
+    const path = writeSkill('project-skill', 'project-dsh')
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const req = fakeReq('PUT', '/skill-manager/api/skills/project-skill/invocation?scope=project&cwd=%2Fworkspace')
+    ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
+      async function* () { yield Buffer.from(JSON.stringify({ enabled: false })) }
+    const { out, body } = await invoke(routes[0]!.handler, req)
+    expect(out.status).toBe(200)
+    const skill = (body as { skill: { modelInvocable: boolean; userInvocable: boolean } }).skill
+    expect(skill.modelInvocable).toBe(false)
+    expect(skill.userInvocable).toBe(false)
+    expect(readFileSync(path, 'utf8')).toContain('disable-model-invocation: true')
+    expect(readFileSync(path, 'utf8')).toContain('user-invocable: false')
+  })
+
+  it('serves the workspace list on GET /skill-manager/api/workspaces', async () => {
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const { out, body } = await invoke(routes[0]!.handler, fakeReq('GET', '/skill-manager/api/workspaces'))
+    expect(out.status).toBe(200)
+    expect(body.workspaces).toEqual([])
   })
 })

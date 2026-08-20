@@ -1,9 +1,3 @@
-# Separate repositories — kept out of this workspace repo (own remotes):
-#   DSH-better-sidebar -> omdsh-dev/DSH-better-sidebar
-#   dsh-web-ui        -> luoxunhao/dsh-web-ui
-/DSH-better-sidebar/
-/dsh-web-ui/
-
 # Dependencies
 node_modules/
 
@@ -11,6 +5,3 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
-
-/dsh-at-file/
-/dsh-market/

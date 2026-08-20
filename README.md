@@ -5,15 +5,12 @@ Personal DeepSeek Harness plugins that live **outside** the dsh source tree, so 
 | Package | Role |
 |---|---|
 | [`dsh-codex-project/`](dsh-codex-project/README.md) | 工作区共享子目录：一个工作区挂载任意数量的共享子目录（可跨盘符），会话在 `workspace-write` 权限下直接读写它们（源自 Codex 的项目处理思想；无需 `danger-full-access`）。含「打开本地目录」与「管理工作区」原生「…」菜单入口。 |
+| [`DSH-better-sidebar/`](DSH-better-sidebar/README.md) | 典型插件标杆（web 插件 host/client 双半），以 **git submodule** 跟踪，`origin` 指向原仓库 `omdsh-dev/DSH-better-sidebar`。 |
+| [`dsh-market/`](dsh-market/README.md) | 以 **git submodule** 跟踪，`origin` 指向原仓库 `dsh-market/dsh-market`。 |
+| [`dsh-web-ui/`](dsh-web-ui/README.md) | 以 **git submodule** 跟踪，`origin` 指向原仓库 `zhu1090093659/dsh-web-ui`。 |
+| [`dsh-at-file/`](dsh-at-file/README.md) | 以 **git submodule** 跟踪，`origin` 指向原仓库 `omdsh-dev/dsh-at-file`。 |
 
-## 不在本仓库
-
-以下项目各自保持独立仓库（本仓库 `.gitignore` 已排除，克隆后按需单独获取）：
-
-| 目录 | 仓库 |
-|---|---|
-| `DSH-better-sidebar/` | https://github.com/omdsh-dev/DSH-better-sidebar |
-| `dsh-web-ui/` | https://github.com/luoxunhao/dsh-web-ui |
+> 克隆本仓库后需 `git submodule update --init` 拉取子模块。
 
 ## Development
 

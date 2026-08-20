@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ManagedSkill, SkillManagerApi } from './api.ts'
+import type { ManagedSkill, SkillManagerApi, SkillScope, Workspace } from './api.ts'
 import { t } from './locales.ts'
 
 /** Registration-side business face for the section. */
@@ -121,15 +121,48 @@ const refreshRow: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
 }
+const tabs: React.CSSProperties = {
+  display: 'flex',
+  gap: '6px',
+  borderBottom: '1px solid var(--dsw-alias-border-base, #e2e2e8)',
+  paddingBottom: '6px',
+}
+const tab: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  padding: '4px 10px',
+  borderRadius: '8px',
+  cursor: 'pointer',
+  fontSize: '13px',
+  color: 'var(--dsw-alias-text-muted, #6b6b76)',
+}
+const tabActive: React.CSSProperties = {
+  ...tab,
+  color: 'var(--dsw-accent, #2563eb)',
+  background: 'var(--dsw-accent-soft, rgba(37,99,235,0.12))',
+  fontWeight: 600,
+}
+const select: React.CSSProperties = {
+  padding: '4px 8px',
+  borderRadius: '8px',
+  border: '1px solid var(--dsw-alias-border-base, #e2e2e8)',
+  fontSize: '13px',
+  background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+  color: 'inherit',
+}
 
 /** One rendered catalog row. */
 function SkillRow({
   skill,
   api,
+  scope,
+  cwd,
   onChange,
 }: {
   skill: ManagedSkill
   api: SkillManagerApi
+  scope: SkillScope
+  cwd?: string
   onChange: (next: ManagedSkill) => void
 }): ReactNode {
   const [expanded, setExpanded] = useState(false)
@@ -145,14 +178,14 @@ function SkillRow({
     setExpanded(true)
     if (body !== null) return
     setBodyError(null)
-    api.getBody(skill.name)
+    api.getBody(skill.name, scope, cwd)
       .then(setBody)
       .catch((error: unknown) => setBodyError(error instanceof Error ? error.message : String(error)))
-  }, [expanded, body, api, skill.name])
+  }, [expanded, body, api, skill.name, scope, cwd])
 
   const onToggle = useCallback((enabled: boolean) => {
     setPending({ enabled })
-    api.setInvocation(skill.name, { enabled })
+    api.setInvocation(skill.name, { enabled }, scope, cwd)
       .then((next) => {
         setPending({})
         onChange(next)
@@ -161,7 +194,7 @@ function SkillRow({
         setPending({})
         setBodyError(t('toggleFailed'))
       })
-  }, [api, skill.name, onChange])
+  }, [api, skill.name, onChange, scope, cwd])
 
   // The single master toggle reflects BOTH invocation flags in sync.
   const enabled = skill.modelInvocable && skill.userInvocable
@@ -220,40 +253,114 @@ function SkillRow({
 }
 
 /**
- * The section body: catalog header with a manual refresh plus the skill rows.
+ * The section body: a user/project tab switcher, a workspace dropdown for the
+ * project tab, a refresh action, and the skill rows for the active scope.
  */
 export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
   const { api } = props
+  const [scope, setScope] = useState<SkillScope>('user')
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [selectedWsId, setSelectedWsId] = useState<string | null>(null)
   const [skills, setSkills] = useState<ManagedSkill[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  const load = useCallback(() => {
+  const selectedWs = workspaces.find((ws) => ws.id === selectedWsId)
+
+  const load = useCallback((target: SkillScope, ws?: Workspace) => {
     setError(null)
     setPending(true)
-    api.list()
+    if (target === 'project' && ws === undefined) {
+      setSkills([])
+      setPending(false)
+      return
+    }
+    api.list(target, target === 'project' ? ws?.path : undefined)
       .then(setSkills)
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setPending(false))
   }, [api])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    api.listWorkspaces()
+      .then((list) => {
+        setWorkspaces(list)
+        if (list.length > 0) setSelectedWsId(list[0]!.id)
+      })
+      .catch(() => setWorkspaces([]))
+    load('user')
+  }, [api, load])
+
+  const switchScope = useCallback((next: SkillScope) => {
+    setScope(next)
+    if (next === 'project') {
+      load('project', workspaces.find((ws) => ws.id === selectedWsId))
+    } else {
+      load('user')
+    }
+  }, [load, workspaces, selectedWsId])
+
+  const onWorkspaceChange = useCallback((id: string) => {
+    setSelectedWsId(id)
+    load('project', workspaces.find((ws) => ws.id === id))
+  }, [load, workspaces])
+
+  const refresh = useCallback(() => {
+    if (scope === 'project') {
+      load('project', workspaces.find((ws) => ws.id === selectedWsId))
+    } else {
+      load('user')
+    }
+  }, [scope, load, workspaces, selectedWsId])
 
   return (
     <section style={card}>
-      <div style={refreshRow}>
-        <p style={meta}>{t('intro')}</p>
-        <button type="button" style={linkButton} onClick={load}>
-          {pending ? t('loading') : t('refresh')}
+      <div style={tabs}>
+        <button type="button" style={scope === 'user' ? tabActive : tab} onClick={() => switchScope('user')}>
+          {t('userTab')}
+        </button>
+        <button type="button" style={scope === 'project' ? tabActive : tab} onClick={() => switchScope('project')}>
+          {t('projectTab')}
         </button>
       </div>
+
+      {scope === 'project'
+        ? (
+          <div style={refreshRow}>
+            <label style={{ ...meta, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {t('workspace')}
+              <select
+                style={select}
+                value={selectedWsId ?? ''}
+                onChange={(e) => onWorkspaceChange(e.target.value)}
+              >
+                {workspaces.length === 0
+                  ? <option value="">{t('noWorkspaces')}</option>
+                  : workspaces.map((ws) => (
+                    <option key={ws.id} value={ws.id}>{ws.title} — {ws.path}</option>
+                  ))}
+              </select>
+            </label>
+            <button type="button" style={linkButton} onClick={refresh}>
+              {pending ? t('loading') : t('refresh')}
+            </button>
+          </div>
+        )
+        : (
+          <div style={refreshRow}>
+            <p style={meta}>{t('intro')}</p>
+            <button type="button" style={linkButton} onClick={refresh}>
+              {pending ? t('loading') : t('refresh')}
+            </button>
+          </div>
+        )}
 
       {error !== null ? <div style={errorText}>{error}</div> : null}
       {skills === null && error === null
         ? <div style={meta}>{t('loading')}</div>
         : null}
-      {skills !== null && skills.length === 0
-        ? <div style={meta}>{t('empty')}</div>
+      {skills !== null && skills.length === 0 && error === null
+        ? <div style={meta}>{scope === 'project' ? t('projectEmpty') : t('empty')}</div>
         : null}
       {skills === null ? null : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -262,6 +369,8 @@ export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
               key={skill.name}
               skill={skill}
               api={api}
+              scope={scope}
+              cwd={scope === 'project' ? selectedWs?.path : undefined}
               onChange={(next) => setSkills(prev => prev?.map(row => row.name === next.name ? next : row) ?? null)}
             />
           ))}

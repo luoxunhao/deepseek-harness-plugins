@@ -15,9 +15,9 @@
  * writes fall back to these disk locators when `ctx.skills.get(name)` cannot
  * see the skill.
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { SkillDefinition } from '@deepseek-ai/dsh-skill'
 import { isSkillName } from '@deepseek-ai/dsh-skill'
 import { parseFrontmatterScalars } from './frontmatter.ts'
@@ -43,6 +43,99 @@ export function userSkillRoots(): ReadonlyArray<{ source: SkillDefinition['sourc
   ]
 }
 
+/**
+ * Walk up from `cwd` until a `.git` marker is found, mirroring DSH's
+ * `findProjectRoot`. Returns `cwd` when no project marker exists above it.
+ */
+export async function findProjectRoot(cwd: string): Promise<string> {
+  let current = cwd
+  while (true) {
+    try {
+      await stat(join(current, '.git'))
+      return current
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return cwd
+      current = parent
+    }
+  }
+}
+
+/**
+ * The two project-scope roots of one workspace (source → directory under the
+ * discovered project root). Mirrors DSH's skill-filesystem provider.
+ */
+export async function projectSkillRoots(cwd: string): Promise<ReadonlyArray<{ source: SkillDefinition['source']; path: string }>> {
+  const projectRoot = await findProjectRoot(cwd)
+  return [
+    { source: 'project-dsh', path: join(projectRoot, '.dsh', 'skills') },
+    { source: 'project-agents', path: join(projectRoot, '.agents', 'skills') },
+  ]
+}
+
+/** Enumerate one skill root into disk rows. */
+async function enumerateRoot(
+  root: { source: SkillDefinition['source']; path: string },
+): Promise<DiskSkill[]> {
+  let entries
+  try {
+    entries = await readdir(root.path, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out: DiskSkill[] = []
+  for (const entry of entries) {
+    const name = entry.name
+    let filePath: string
+    if (entry.isDirectory()) {
+      filePath = join(root.path, name, 'SKILL.md')
+    } else if (entry.isFile() && name.endsWith('.md')) {
+      filePath = join(root.path, name)
+    } else {
+      continue
+    }
+    let raw: string
+    try {
+      raw = await readFile(filePath, 'utf8')
+    } catch {
+      continue
+    }
+    const skill = parseDiskSkillFile(raw, filePath, root.source)
+    if (skill !== undefined) out.push(skill)
+  }
+  return out
+}
+
+/** Enumerate user-scope disk skills across every configured user root. */
+export async function discoverUserSkills(): Promise<DiskSkill[]> {
+  const out: DiskSkill[] = []
+  for (const root of userSkillRoots()) {
+    out.push(...await enumerateRoot(root))
+  }
+  return out
+}
+
+/** Enumerate one workspace's project-scope disk skills (project-dsh + project-agents). */
+export async function discoverProjectSkills(cwd: string): Promise<DiskSkill[]> {
+  const out: DiskSkill[] = []
+  for (const root of await projectSkillRoots(cwd)) {
+    out.push(...await enumerateRoot(root))
+  }
+  return out
+}
+
+/** Find one user-scope disk skill by name, or `undefined`. */
+export async function findDiskSkill(name: string): Promise<DiskSkill | undefined> {
+  const all = await discoverUserSkills()
+  return all.find((skill) => skill.name === name)
+}
+
+/** Find one workspace's project-scope disk skill by name, or `undefined`. */
+export async function findProjectDiskSkill(cwd: string, name: string): Promise<DiskSkill | undefined> {
+  const all = await discoverProjectSkills(cwd)
+  return all.find((skill) => skill.name === name)
+}
+
 /** Parse one skill file's text into a disk skill row, or `undefined` if invalid. */
 export function parseDiskSkillFile(
   raw: string,
@@ -65,43 +158,4 @@ export function parseDiskSkillFile(
     modelInvocable: data['disable-model-invocation'] !== true,
     userInvocable: data['user-invocable'] !== false,
   }
-}
-
-/** Enumerate user-scope disk skills across every configured user root. */
-export async function discoverUserSkills(): Promise<DiskSkill[]> {
-  const out: DiskSkill[] = []
-  for (const root of userSkillRoots()) {
-    let entries
-    try {
-      entries = await readdir(root.path, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      const name = entry.name
-      let filePath: string
-      if (entry.isDirectory()) {
-        filePath = join(root.path, name, 'SKILL.md')
-      } else if (entry.isFile() && name.endsWith('.md')) {
-        filePath = join(root.path, name)
-      } else {
-        continue
-      }
-      let raw: string
-      try {
-        raw = await readFile(filePath, 'utf8')
-      } catch {
-        continue
-      }
-      const skill = parseDiskSkillFile(raw, filePath, root.source)
-      if (skill !== undefined) out.push(skill)
-    }
-  }
-  return out
-}
-
-/** Find one user-scope disk skill by name, or `undefined`. */
-export async function findDiskSkill(name: string): Promise<DiskSkill | undefined> {
-  const all = await discoverUserSkills()
-  return all.find((skill) => skill.name === name)
 }

@@ -5,23 +5,34 @@
  * the merged skill catalog and write per-skill invocation policy back to the
  * skill's own frontmatter file:
  *
- *   GET  /skill-manager/api/skills                       → { skills }
- *   GET  /skill-manager/api/skills/:name/body            → { content }
- *   PUT  /skill-manager/api/skills/:name/invocation      → { skill }
- *        body: { modelInvocable?, userInvocable? }
+ *   GET  /skill-manager/api/skills?scope=user|project&cwd=<dir>   → { skills }
+ *   GET  /skill-manager/api/workspaces                             → { workspaces }
+ *   GET  /skill-manager/api/skills/:name/body?scope=&cwd=          → { content }
+ *   PUT  /skill-manager/api/skills/:name/invocation?scope=&cwd=    → { skill }
+ *        body: { enabled }
  *
+ * `scope` selects user-level vs one workspace's project-level skills; `cwd`
+ * (the workspace directory) is required for project scope and is the only
+ * client-supplied path — it is never a write target, only a lookup scope.
  * Reads ride the public `ctx.skills` read API (snapshot + get). Writes accept
  * only a skill NAME from the client; the target path is resolved server-side
- * from `ctx.skills.get(name).path`, so a client can never direct a write to an
- * arbitrary location. Everything is a pure catalog/browse/edit surface — no
- * skill content is created, deleted, or moved here.
+ * from `ctx.skills.get(name, { cwd }).path`, so a client can never direct a
+ * write to an arbitrary location. Everything is a pure catalog/browse/edit
+ * surface — no skill content is created, deleted, or moved here.
  */
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: pulls the webServer service's Context merge (ctx.webServer).
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isTrustedApiRequest } from './trust-fence.ts'
-import { getSkillBody, listManagedSkills, setInvocation, SkillWriteError } from './skills.ts'
+import {
+  getSkillBody,
+  listManagedSkills,
+  listWorkspaces,
+  setInvocation,
+  SkillWriteError,
+} from './skills.ts'
+import type { SkillScope } from './skills.ts'
 
 export const name = 'dsh-skill-manager'
 export const inject = ['skills', 'webServer']
@@ -33,6 +44,16 @@ const TRUSTED_HOSTS: readonly string[] = []
 /** The PUT body: a single master enable flag for BOTH model and user. */
 interface ToggleRequestBody {
   enabled?: boolean
+}
+
+/** Derive the requested skill scope from query params (`scope`, `cwd`). */
+function scopeFromQuery(url: URL): SkillScope | undefined {
+  if (url.searchParams.get('scope') === 'project') {
+    const cwd = url.searchParams.get('cwd')
+    if (cwd === null || cwd === '') return undefined
+    return { kind: 'project', cwd }
+  }
+  return { kind: 'user' }
 }
 
 /** Handle every /skill-manager/api request: fence, route, respond. */
@@ -49,13 +70,27 @@ async function handleApi(
   const path = url.pathname
   try {
     if (req.method === 'GET' && path === `${API_PREFIX}/skills`) {
-      sendJson(res, 200, { skills: await listManagedSkills(ctx) })
+      const scope = scopeFromQuery(url)
+      if (scope === undefined) {
+        sendJson(res, 400, { error: 'missing cwd for project scope' })
+        return
+      }
+      sendJson(res, 200, { skills: await listManagedSkills(ctx, { scope }) })
+      return
+    }
+    if (req.method === 'GET' && path === `${API_PREFIX}/workspaces`) {
+      sendJson(res, 200, { workspaces: listWorkspaces(ctx) })
       return
     }
     const bodyMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/body$/.exec(path)
     if (req.method === 'GET' && bodyMatch) {
       const name = decodeURIComponent(bodyMatch[1] ?? '')
-      const content = await getSkillBody(ctx, name)
+      const scope = scopeFromQuery(url)
+      if (scope === undefined) {
+        sendJson(res, 400, { error: 'missing cwd for project scope' })
+        return
+      }
+      const content = await getSkillBody(ctx, name, { scope })
       if (content === undefined) {
         sendJson(res, 404, { error: `unknown skill: ${name}` })
         return
@@ -66,13 +101,18 @@ async function handleApi(
     const toggleMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/invocation$/.exec(path)
     if (req.method === 'PUT' && toggleMatch) {
       const name = decodeURIComponent(toggleMatch[1] ?? '')
+      const scope = scopeFromQuery(url)
+      if (scope === undefined) {
+        sendJson(res, 400, { error: 'missing cwd for project scope' })
+        return
+      }
       const body = await readJson<ToggleRequestBody>(req)
       const enabled = typeof body?.enabled === 'boolean' ? body.enabled : undefined
       if (enabled === undefined) {
         sendJson(res, 400, { error: 'missing enabled boolean' })
         return
       }
-      const skill = await setInvocation(ctx, name, { enabled })
+      const skill = await setInvocation(ctx, name, { enabled }, { scope })
       sendJson(res, 200, { skill })
       return
     }

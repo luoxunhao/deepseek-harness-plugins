@@ -28,6 +28,12 @@ export declare const zh: {
     readonly hideBody: "收起正文";
     readonly bodyLoadFailed: "正文加载失败";
     readonly toggles: "调用策略";
+    readonly userTab: "用户级";
+    readonly projectTab: "项目级";
+    readonly workspace: "工作区";
+    readonly selectWorkspace: "选择工作区";
+    readonly noWorkspaces: "没有可用的工作区";
+    readonly projectEmpty: "当前工作区没有项目级技能";
 };
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 export declare const en: Record<keyof typeof zh, string>;

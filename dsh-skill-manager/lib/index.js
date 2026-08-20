@@ -1,4 +1,4 @@
-import { readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { isModelInvocable, isSkillName, isUserInvocable } from "@deepseek-ai/dsh-skill";
@@ -183,6 +183,81 @@ function userSkillRoots() {
 		path: join(dshHome, "skills")
 	}];
 }
+/**
+* Walk up from `cwd` until a `.git` marker is found, mirroring DSH's
+* `findProjectRoot`. Returns `cwd` when no project marker exists above it.
+*/
+async function findProjectRoot(cwd) {
+	let current = cwd;
+	while (true) try {
+		await stat(join(current, ".git"));
+		return current;
+	} catch {
+		const parent = dirname(current);
+		if (parent === current) return cwd;
+		current = parent;
+	}
+}
+/**
+* The two project-scope roots of one workspace (source → directory under the
+* discovered project root). Mirrors DSH's skill-filesystem provider.
+*/
+async function projectSkillRoots(cwd) {
+	const projectRoot = await findProjectRoot(cwd);
+	return [{
+		source: "project-dsh",
+		path: join(projectRoot, ".dsh", "skills")
+	}, {
+		source: "project-agents",
+		path: join(projectRoot, ".agents", "skills")
+	}];
+}
+/** Enumerate one skill root into disk rows. */
+async function enumerateRoot(root) {
+	let entries;
+	try {
+		entries = await readdir(root.path, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	const out = [];
+	for (const entry of entries) {
+		const name = entry.name;
+		let filePath;
+		if (entry.isDirectory()) filePath = join(root.path, name, "SKILL.md");
+		else if (entry.isFile() && name.endsWith(".md")) filePath = join(root.path, name);
+		else continue;
+		let raw;
+		try {
+			raw = await readFile(filePath, "utf8");
+		} catch {
+			continue;
+		}
+		const skill = parseDiskSkillFile(raw, filePath, root.source);
+		if (skill !== void 0) out.push(skill);
+	}
+	return out;
+}
+/** Enumerate user-scope disk skills across every configured user root. */
+async function discoverUserSkills() {
+	const out = [];
+	for (const root of userSkillRoots()) out.push(...await enumerateRoot(root));
+	return out;
+}
+/** Enumerate one workspace's project-scope disk skills (project-dsh + project-agents). */
+async function discoverProjectSkills(cwd) {
+	const out = [];
+	for (const root of await projectSkillRoots(cwd)) out.push(...await enumerateRoot(root));
+	return out;
+}
+/** Find one user-scope disk skill by name, or `undefined`. */
+async function findDiskSkill(name) {
+	return (await discoverUserSkills()).find((skill) => skill.name === name);
+}
+/** Find one workspace's project-scope disk skill by name, or `undefined`. */
+async function findProjectDiskSkill(cwd, name) {
+	return (await discoverProjectSkills(cwd)).find((skill) => skill.name === name);
+}
 /** Parse one skill file's text into a disk skill row, or `undefined` if invalid. */
 function parseDiskSkillFile(raw, path, source) {
 	const data = parseFrontmatterScalars(raw);
@@ -201,38 +276,6 @@ function parseDiskSkillFile(raw, path, source) {
 		userInvocable: data["user-invocable"] !== false
 	};
 }
-/** Enumerate user-scope disk skills across every configured user root. */
-async function discoverUserSkills() {
-	const out = [];
-	for (const root of userSkillRoots()) {
-		let entries;
-		try {
-			entries = await readdir(root.path, { withFileTypes: true });
-		} catch {
-			continue;
-		}
-		for (const entry of entries) {
-			const name = entry.name;
-			let filePath;
-			if (entry.isDirectory()) filePath = join(root.path, name, "SKILL.md");
-			else if (entry.isFile() && name.endsWith(".md")) filePath = join(root.path, name);
-			else continue;
-			let raw;
-			try {
-				raw = await readFile(filePath, "utf8");
-			} catch {
-				continue;
-			}
-			const skill = parseDiskSkillFile(raw, filePath, root.source);
-			if (skill !== void 0) out.push(skill);
-		}
-	}
-	return out;
-}
-/** Find one user-scope disk skill by name, or `undefined`. */
-async function findDiskSkill(name) {
-	return (await discoverUserSkills()).find((skill) => skill.name === name);
-}
 //#endregion
 //#region src/skills.ts
 /**
@@ -248,6 +291,12 @@ async function findDiskSkill(name) {
 */
 /** Skill sources that must never be written by this plugin (no disk file of ours). */
 const NON_TOGGLEABLE_SOURCES = ["bundled", "runtime"];
+/** Skill sources that belong to a workspace's project scope. */
+const PROJECT_SOURCES = ["project-dsh", "project-agents"];
+/** Whether a source is a project-scope bucket. */
+function isProjectSource(source) {
+	return PROJECT_SOURCES.includes(source);
+}
 /** A user-facing write failure (skill unknown, not toggleable, no frontmatter). */
 var SkillWriteError = class extends Error {
 	constructor(message) {
@@ -298,23 +347,31 @@ function mergeManagedSkills(registry, disk) {
 	return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 /**
-* Assemble the full merged skill catalog as UI rows. Registry rows (the
-* canonical merged snapshot) are authoritative; user-scope disk skills the
-* registry cannot surface (project-scoped `ctx.fs` masks them) are appended.
+* Assemble the merged skill catalog as UI rows for one scope. User scope reads
+* the canonical no-cwd snapshot (project roots are not scanned without a
+* cwd) plus user-scope disk skills the registry cannot surface. Project scope
+* reads the registry with the workspace `cwd` and keeps only project-scope
+* rows, plus project-scope disk skills the registry cannot surface.
 * @param ctx - a context with the `skills` service ready.
-* @param discoverDisk - disk-skill enumerator (injectable for tests).
+* @param deps - optional disk-locator seams (defaults to real discovery).
 * @returns alphabetically sorted, invocation-resolved skill rows.
 */
-async function listManagedSkills(ctx, discoverDisk = discoverUserSkills) {
-	const { skills } = await ctx.skills.snapshot();
+async function listManagedSkills(ctx, deps = {}) {
+	const discoverUser = deps.discoverUser ?? discoverUserSkills;
+	const discoverProject = deps.discoverProject ?? discoverProjectSkills;
+	const scope = deps.scope ?? { kind: "user" };
+	const summary = await (scope.kind === "project" ? ctx.skills.snapshot({ cwd: scope.cwd }) : ctx.skills.snapshot());
 	const rows = [];
-	for (const summary of skills) {
-		if (!isSkillName(summary.name)) continue;
-		const def = await ctx.skills.get(summary.name);
+	for (const entry of summary.skills) {
+		if (!isSkillName(entry.name)) continue;
+		const def = await (scope.kind === "project" ? ctx.skills.get(entry.name, { cwd: scope.cwd }) : ctx.skills.get(entry.name));
 		if (def === void 0) continue;
+		if (scope.kind === "project" && !isProjectSource(def.source)) continue;
+		if (scope.kind === "user" && isProjectSource(def.source)) continue;
 		rows.push(toManagedSkill(def));
 	}
-	return mergeManagedSkills(rows, (await discoverDisk()).map(diskToManagedSkill));
+	const merged = mergeManagedSkills(rows, (scope.kind === "project" ? await discoverProject(scope.cwd) : await discoverUser()).map(diskToManagedSkill));
+	return scope.kind === "project" ? merged.filter((row) => isProjectSource(row.source)) : merged.filter((row) => !isProjectSource(row.source));
 }
 /**
 * Translate the master enabled flag into the two raw frontmatter keys, always
@@ -332,28 +389,34 @@ function toFrontmatterPatch(patch) {
 /**
 * Write one invocation policy change to a skill's own frontmatter file. The
 * single {@link InvocationPatch.enabled} flag sets model AND user invocation
-* together (both frontmatter keys are always written, in sync).
+* together (both frontmatter keys are always written, in sync). The write
+* target is the skill's own discovered path for the given scope: user scope
+* resolves through `ctx.skills.get(name)`, project scope through
+* `ctx.skills.get(name, { cwd })`, each with a disk-locator fallback.
 * @param ctx - a context with the `skills` service ready.
 * @param name - the skill to edit (validated against the skill-name grammar).
 * @param patch - `{ enabled }`: true → both invocable, false → both disabled.
-* @param resolveDisk - user-disk locator (injectable for tests).
+* @param deps - optional disk-locator seams and scope (defaults to user scope).
 * @returns the refreshed skill row after the write.
 * @throws {@link SkillWriteError} when the name is invalid, the skill is
 *   unknown, not toggleable, or its file carries no frontmatter.
 */
-async function setInvocation(ctx, name, patch, resolveDisk = findDiskSkill) {
+async function setInvocation(ctx, name, patch, deps = {}) {
+	const findUser = deps.findUser ?? findDiskSkill;
+	const findProject = deps.findProject ?? findProjectDiskSkill;
+	const scope = deps.scope ?? { kind: "user" };
 	if (!isSkillName(name)) throw new SkillWriteError(`invalid skill name: ${name}`);
-	const def = await ctx.skills.get(name);
+	const def = await (scope.kind === "project" ? ctx.skills.get(name, { cwd: scope.cwd }) : ctx.skills.get(name));
 	if (def !== void 0 && isToggleable(def)) {
 		const path = def.path;
 		const next = applyFrontmatterPatch(await readFile(path, "utf8"), toFrontmatterPatch(patch));
 		if (next === void 0) throw new SkillWriteError(`skill file has no frontmatter block: ${path}`);
 		await atomicWrite(path, next);
-		const updated = await ctx.skills.get(name);
+		const updated = await (scope.kind === "project" ? ctx.skills.get(name, { cwd: scope.cwd }) : ctx.skills.get(name));
 		if (updated === void 0) throw new SkillWriteError(`skill vanished after write: ${name}`);
 		return toManagedSkill(updated);
 	}
-	const disk = await resolveDisk(name);
+	const disk = scope.kind === "project" ? await findProject(scope.cwd, name) : await findUser(name);
 	if (disk !== void 0) {
 		const next = applyFrontmatterPatch(await readFile(disk.path, "utf8"), toFrontmatterPatch(patch));
 		if (next === void 0) throw new SkillWriteError(`skill file has no frontmatter block: ${disk.path}`);
@@ -366,22 +429,40 @@ async function setInvocation(ctx, name, patch, resolveDisk = findDiskSkill) {
 	throw new SkillWriteError(`skill is not toggleable: ${name} (source: ${def.source})`);
 }
 /**
-* Read one skill's instruction body. Prefers the registry-loaded definition
-* (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
-* (a project `fs` masks the user roots), falls back to reading the skill file
-* directly and stripping its frontmatter. The body is trimmed as DSH trims.
+* Read one skill's instruction body for a scope. Prefers the registry-loaded
+* definition (`ctx.skills.get`, with the workspace `cwd` in project scope);
+* when the registry cannot surface a disk skill, falls back to reading the
+* skill file directly and stripping its frontmatter. The body is trimmed as
+* DSH trims.
 * @param ctx - a context with the `skills` service ready.
 * @param name - the skill to read.
-* @param resolveDisk - user-disk locator (injectable for tests).
+* @param deps - optional disk-locator seams and scope (defaults to user scope).
 * @returns the skill body, or `undefined` when the skill is unknown.
 */
-async function getSkillBody(ctx, name, resolveDisk = findDiskSkill) {
+async function getSkillBody(ctx, name, deps = {}) {
+	const findUser = deps.findUser ?? findDiskSkill;
+	const findProject = deps.findProject ?? findProjectDiskSkill;
+	const scope = deps.scope ?? { kind: "user" };
 	if (!isSkillName(name)) return void 0;
-	const def = await ctx.skills.get(name);
+	const def = await (scope.kind === "project" ? ctx.skills.get(name, { cwd: scope.cwd }) : ctx.skills.get(name));
 	if (def !== void 0) return def.content;
-	const disk = await resolveDisk(name);
+	const disk = scope.kind === "project" ? await findProject(scope.cwd, name) : await findUser(name);
 	if (disk === void 0) return void 0;
 	return stripFrontmatterBody(await readFile(disk.path, "utf8"))?.trim();
+}
+/**
+* List the host's registered workspaces for the project-level workspace
+* dropdown. Reads `ctx.workspaceRegistry` when present (optional dependency);
+* an absent registry yields an empty list so the plugin still works without it.
+*/
+function listWorkspaces(ctx) {
+	const registry = typeof ctx.get === "function" ? ctx.get("workspaceRegistry") : void 0;
+	if (registry === void 0 || typeof registry.list !== "function") return [];
+	return registry.list().map((workspace) => ({
+		id: workspace.id,
+		path: workspace.path,
+		title: workspace.title
+	}));
 }
 /**
 * Atomic replace: write a sibling temp file, then rename over the target. On
@@ -416,22 +497,49 @@ const inject = ["skills", "webServer"];
 const API_PREFIX = "/skill-manager/api";
 /** Routes that can never be read-only browse targets of a trusted host. */
 const TRUSTED_HOSTS = [];
+/** Derive the requested skill scope from query params (`scope`, `cwd`). */
+function scopeFromQuery(url) {
+	if (url.searchParams.get("scope") === "project") {
+		const cwd = url.searchParams.get("cwd");
+		if (cwd === null || cwd === "") return void 0;
+		return {
+			kind: "project",
+			cwd
+		};
+	}
+	return { kind: "user" };
+}
 /** Handle every /skill-manager/api request: fence, route, respond. */
 async function handleApi(ctx, req, res) {
 	if (!isTrustedApiRequest(req, TRUSTED_HOSTS)) {
 		sendJson(res, 403, { error: "forbidden" });
 		return;
 	}
-	const path = new URL(req.url ?? "/", "http://local").pathname;
+	const url = new URL(req.url ?? "/", "http://local");
+	const path = url.pathname;
 	try {
 		if (req.method === "GET" && path === `${API_PREFIX}/skills`) {
-			sendJson(res, 200, { skills: await listManagedSkills(ctx) });
+			const scope = scopeFromQuery(url);
+			if (scope === void 0) {
+				sendJson(res, 400, { error: "missing cwd for project scope" });
+				return;
+			}
+			sendJson(res, 200, { skills: await listManagedSkills(ctx, { scope }) });
+			return;
+		}
+		if (req.method === "GET" && path === `${API_PREFIX}/workspaces`) {
+			sendJson(res, 200, { workspaces: listWorkspaces(ctx) });
 			return;
 		}
 		const bodyMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/body$/.exec(path);
 		if (req.method === "GET" && bodyMatch) {
 			const name = decodeURIComponent(bodyMatch[1] ?? "");
-			const content = await getSkillBody(ctx, name);
+			const scope = scopeFromQuery(url);
+			if (scope === void 0) {
+				sendJson(res, 400, { error: "missing cwd for project scope" });
+				return;
+			}
+			const content = await getSkillBody(ctx, name, { scope });
 			if (content === void 0) {
 				sendJson(res, 404, { error: `unknown skill: ${name}` });
 				return;
@@ -442,13 +550,18 @@ async function handleApi(ctx, req, res) {
 		const toggleMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/invocation$/.exec(path);
 		if (req.method === "PUT" && toggleMatch) {
 			const name = decodeURIComponent(toggleMatch[1] ?? "");
+			const scope = scopeFromQuery(url);
+			if (scope === void 0) {
+				sendJson(res, 400, { error: "missing cwd for project scope" });
+				return;
+			}
 			const body = await readJson(req);
 			const enabled = typeof body?.enabled === "boolean" ? body.enabled : void 0;
 			if (enabled === void 0) {
 				sendJson(res, 400, { error: "missing enabled boolean" });
 				return;
 			}
-			sendJson(res, 200, { skill: await setInvocation(ctx, name, { enabled }) });
+			sendJson(res, 200, { skill: await setInvocation(ctx, name, { enabled }, { scope }) });
 			return;
 		}
 		sendJson(res, 404, { error: "not found" });
