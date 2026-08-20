@@ -9,13 +9,13 @@
  * is always `ctx.skills.get(name).path`, so a client can never steer a write
  * to an arbitrary location — only the skill name crosses the wire.
  */
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { isModelInvocable, isSkillName, isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { SkillDefinition } from '@deepseek-ai/dsh-skill'
-import { applyFrontmatterPatch } from './frontmatter.ts'
+import { applyFrontmatterPatch, stripFrontmatterBody } from './frontmatter.ts'
 import type { FrontmatterPatch } from './frontmatter.ts'
 import { discoverUserSkills, findDiskSkill, parseDiskSkillFile } from './user-skills.ts'
 import type { DiskSkill } from './user-skills.ts'
@@ -45,10 +45,9 @@ export class SkillWriteError extends Error {
   }
 }
 
-/** A semantic invocation change: omitted keys stay untouched. */
+/** A single master enable flag driving BOTH model and user invocation in sync. */
 export interface InvocationPatch {
-  modelInvocable?: boolean
-  userInvocable?: boolean
+  enabled: boolean
 }
 
 /** Whether a skill may be toggled: it has a disk path and is not read-only by source. */
@@ -125,28 +124,26 @@ export async function listManagedSkills(
 }
 
 /**
- * Translate a semantic invocation patch into the raw frontmatter keys. The
- * model key is negated: `modelInvocable: false` means "disable model
- * invocation" → `disable-model-invocation: true`; `modelInvocable: true`
- * (the permissive default) removes the key entirely. `userInvocable: false`
- * writes `user-invocable: false`; `true` removes the key.
+ * Translate the master enabled flag into the two raw frontmatter keys, always
+ * writing BOTH keys so model and user invocation stay in sync. The model key
+ * is negated: enabling writes `disable-model-invocation: false`, disabling
+ * writes `disable-model-invocation: true`; the user key is positive:
+ * `user-invocable: true` on enable, `false` on disable.
  */
 function toFrontmatterPatch(patch: InvocationPatch): FrontmatterPatch {
-  const out: FrontmatterPatch = {}
-  if (patch.modelInvocable !== undefined) {
-    out['disable-model-invocation'] = patch.modelInvocable ? undefined : true
+  return {
+    'disable-model-invocation': !patch.enabled,
+    'user-invocable': patch.enabled,
   }
-  if (patch.userInvocable !== undefined) {
-    out['user-invocable'] = patch.userInvocable ? undefined : false
-  }
-  return out
 }
 
 /**
- * Write one invocation policy change to a skill's own frontmatter file.
+ * Write one invocation policy change to a skill's own frontmatter file. The
+ * single {@link InvocationPatch.enabled} flag sets model AND user invocation
+ * together (both frontmatter keys are always written, in sync).
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to edit (validated against the skill-name grammar).
- * @param patch - which policy keys to set; omitted keys stay untouched.
+ * @param patch - `{ enabled }`: true → both invocable, false → both disabled.
  * @param resolveDisk - user-disk locator (injectable for tests).
  * @returns the refreshed skill row after the write.
  * @throws {@link SkillWriteError} when the name is invalid, the skill is
@@ -196,12 +193,58 @@ export async function setInvocation(
   throw new SkillWriteError(`skill is not toggleable: ${name} (source: ${def.source})`)
 }
 
-/** Atomic replace: write a sibling temp file, then rename over the target. */
+/**
+ * Read one skill's instruction body. Prefers the registry-loaded definition
+ * (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
+ * (a project `fs` masks the user roots), falls back to reading the skill file
+ * directly and stripping its frontmatter. The body is trimmed as DSH trims.
+ * @param ctx - a context with the `skills` service ready.
+ * @param name - the skill to read.
+ * @param resolveDisk - user-disk locator (injectable for tests).
+ * @returns the skill body, or `undefined` when the skill is unknown.
+ */
+export async function getSkillBody(
+  ctx: Context,
+  name: string,
+  resolveDisk: (name: string) => Promise<DiskSkill | undefined> = findDiskSkill,
+): Promise<string | undefined> {
+  if (!isSkillName(name)) return undefined
+  const def = await ctx.skills.get(name)
+  if (def !== undefined) return def.content
+  const disk = await resolveDisk(name)
+  if (disk === undefined) return undefined
+  const body = stripFrontmatterBody(await readFile(disk.path, 'utf8'))
+  return body?.trim()
+}
+
+/**
+ * Atomic replace: write a sibling temp file, then rename over the target. On
+ * Windows a rename over an existing target can transiently fail with EPERM
+ * when the target is momentarily held (real-time AV scanning, a brief watcher
+ * handle); a few retries absorb that, and a final EPERM falls back to an
+ * in-place overwrite, which Windows tolerates for an existing file. The target
+ * is a tiny markdown file and DSH's watcher uses awaitWriteFinish, so the
+ * in-place fallback cannot be mistaken for a partial write.
+ */
 async function atomicWrite(path: string, content: string): Promise<void> {
   const tmp = join(
     dirname(path),
     `.${basename(path)}.skill-manager-${process.pid}-${randomBytes(4).toString('hex')}.tmp`,
   )
   await writeFile(tmp, content, 'utf8')
-  await rename(tmp, path)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await rename(tmp, path)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code
+      if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw error
+      if (attempt === 2) {
+        await writeFile(path, content, 'utf8')
+        await rm(tmp, { force: true })
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    }
+  }
 }

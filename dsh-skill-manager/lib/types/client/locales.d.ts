@@ -20,10 +20,8 @@ export declare const zh: {
     readonly provider: "提供方";
     readonly path: "文件路径";
     readonly readOnly: "只读";
-    readonly modelInvocationTitle: "模型可调用";
-    readonly modelInvocationDesc: "该技能是否出现在模型的技能目录，模型可自主调用";
-    readonly userInvocationTitle: "用户可调用";
-    readonly userInvocationDesc: "该技能是否出现在用户命令目录，用户可显式调用";
+    readonly invocationTitle: "启用";
+    readonly invocationDesc: "同时控制模型可调用与用户可调用";
     readonly enabled: "已启用";
     readonly disabled: "已关闭";
     readonly viewBody: "查看正文";

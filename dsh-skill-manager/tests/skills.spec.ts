@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { isToggleable, listManagedSkills, setInvocation, toManagedSkill, SkillWriteError } from '../src/skills.ts'
+import { isToggleable, listManagedSkills, setInvocation, toManagedSkill, getSkillBody, SkillWriteError } from '../src/skills.ts'
 import type { ManagedSkill } from '../src/skills.ts'
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -146,48 +146,66 @@ describe('listManagedSkills', () => {
   })
 })
 
+describe('getSkillBody', () => {
+  it('returns the registry-loaded body for a registry skill', async () => {
+    writeSkill('a', FM('a'))
+    const ctx = makeFakeCtx(defs)
+    const body = await getSkillBody(ctx, 'a', async () => undefined)
+    expect(body).toBe('body')
+  })
+
+  it('falls back to reading the disk file when the registry cannot see the skill', async () => {
+    const diskPath = join(dir, 'disk-skill')
+    writeFileSync(diskPath, '---\nname: disk-skill\ndescription: d\n---\n\n# Disk body\n')
+    const disk = { name: 'disk-skill', path: diskPath, source: 'user-agents' as const }
+    const ctx = makeFakeCtx(defs)
+    const body = await getSkillBody(ctx, 'disk-skill', async () => disk as never)
+    expect(body).toBe('# Disk body')
+  })
+
+  it('returns undefined for an unknown skill with no disk fallback', async () => {
+    const ctx = makeFakeCtx(defs)
+    expect(await getSkillBody(ctx, 'missing', async () => undefined)).toBeUndefined()
+  })
+})
+
 describe('setInvocation', () => {
   const noDisk = async () => undefined
 
-  it('writes modelInvocable=false as disable-model-invocation: true', async () => {
+  it('disabling writes BOTH keys in sync (model off, user off)', async () => {
     const path = writeSkill('review', FM('review'))
     const ctx = makeFakeCtx(defs)
-    const row = await setInvocation(ctx, 'review', { modelInvocable: false }, noDisk)
+    const row = await setInvocation(ctx, 'review', { enabled: false }, noDisk)
     expect(row.modelInvocable).toBe(false)
-    expect(readFileSync(path, 'utf8')).toContain('disable-model-invocation: true')
-    expect(readFileSync(path, 'utf8')).toContain('body')
-  })
-
-  it('writes userInvocable=false as user-invocable: false', async () => {
-    const path = writeSkill('review', FM('review'))
-    const ctx = makeFakeCtx(defs)
-    const row = await setInvocation(ctx, 'review', { userInvocable: false }, noDisk)
     expect(row.userInvocable).toBe(false)
-    expect(readFileSync(path, 'utf8')).toContain('user-invocable: false')
+    const text = readFileSync(path, 'utf8')
+    expect(text).toContain('disable-model-invocation: true')
+    expect(text).toContain('user-invocable: false')
+    expect(text).toContain('body')
   })
 
-  it('restores the permissive state by removing the keys', async () => {
+  it('enabling writes BOTH keys in sync (model on, user on)', async () => {
     const path = writeSkill('review', `---\nname: review\ndescription: desc\ndisable-model-invocation: true\nuser-invocable: false\n---\n\nbody\n`)
     const ctx = makeFakeCtx(defs)
-    const row = await setInvocation(ctx, 'review', { modelInvocable: true, userInvocable: true }, noDisk)
+    const row = await setInvocation(ctx, 'review', { enabled: true }, noDisk)
     expect(row.modelInvocable).toBe(true)
     expect(row.userInvocable).toBe(true)
     const text = readFileSync(path, 'utf8')
-    expect(text).not.toContain('disable-model-invocation')
-    expect(text).not.toContain('user-invocable')
+    expect(text).toContain('disable-model-invocation: false')
+    expect(text).toContain('user-invocable: true')
     expect(text).toContain('name: review')
     expect(text).toContain('body')
   })
 
   it('rejects an invalid skill name', async () => {
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'Not A Skill!', { modelInvocable: false }, noDisk))
+    await expect(setInvocation(ctx, 'Not A Skill!', { enabled: false }, noDisk))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
   it('rejects an unknown skill', async () => {
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'missing', { modelInvocable: false }, noDisk))
+    await expect(setInvocation(ctx, 'missing', { enabled: false }, noDisk))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -196,7 +214,7 @@ describe('setInvocation', () => {
     writeFileSync(path, FM('builtin'))
     defs.set('builtin', { path, source: 'bundled' })
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'builtin', { modelInvocable: false }, noDisk))
+    await expect(setInvocation(ctx, 'builtin', { enabled: false }, noDisk))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -204,7 +222,7 @@ describe('setInvocation', () => {
     writeFileSync(join(dir, 'noFm'), '# no frontmatter\nbody')
     defs.set('noFm', { path: join(dir, 'noFm'), source: 'user-dsh' })
     const ctx = makeFakeCtx(defs)
-    await expect(setInvocation(ctx, 'noFm', { modelInvocable: false }, noDisk))
+    await expect(setInvocation(ctx, 'noFm', { enabled: false }, noDisk))
       .rejects.toBeInstanceOf(SkillWriteError)
   })
 
@@ -213,9 +231,12 @@ describe('setInvocation', () => {
     writeFileSync(diskPath, FM('disk-skill'))
     const ctx = makeFakeCtx(defs)
     const disk = { name: 'disk-skill', path: diskPath, source: 'user-agents' }
-    const row = await setInvocation(ctx, 'disk-skill', { userInvocable: false }, async () => disk as never)
+    const row = await setInvocation(ctx, 'disk-skill', { enabled: false }, async () => disk as never)
     expect(row.userInvocable).toBe(false)
+    expect(row.modelInvocable).toBe(false)
     expect(row.source).toBe('user-agents')
-    expect(readFileSync(diskPath, 'utf8')).toContain('user-invocable: false')
+    const text = readFileSync(diskPath, 'utf8')
+    expect(text).toContain('disable-model-invocation: true')
+    expect(text).toContain('user-invocable: false')
   })
 })

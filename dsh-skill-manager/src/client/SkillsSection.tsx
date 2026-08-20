@@ -1,10 +1,10 @@
 /**
  * The skill-manager settings section: the merged skill catalog as rows, each
- * expandable to read the skill's instruction body, and each offering two
- * independent invocation toggles (model / user) — offered only for skills
- * that are toggleable (a disk file this plugin may edit). Reads and writes
- * ride the injected {@link SkillManagerApi} face; the read-only sources
- * (bundled, runtime) render with a 只读 marker and disabled switches.
+ * expandable to read the skill's instruction body, and each offering a single
+ * enable toggle that drives model AND user invocation together (offered only
+ * for skills that are toggleable — a disk file this plugin may edit). Reads
+ * and writes ride the injected {@link SkillManagerApi} face; the read-only
+ * sources (bundled, runtime) render with a 只读 marker and a disabled switch.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -23,8 +23,7 @@ export type SkillManagerSectionProps =
   & InjectFace<SkillManagerSectionInjected>
 
 interface PendingToggles {
-  model?: boolean
-  user?: boolean
+  enabled?: boolean
 }
 
 const card: React.CSSProperties = {
@@ -127,9 +126,11 @@ const refreshRow: React.CSSProperties = {
 function SkillRow({
   skill,
   api,
+  onChange,
 }: {
   skill: ManagedSkill
   api: SkillManagerApi
+  onChange: (next: ManagedSkill) => void
 }): ReactNode {
   const [expanded, setExpanded] = useState(false)
   const [body, setBody] = useState<string | null>(null)
@@ -149,21 +150,21 @@ function SkillRow({
       .catch((error: unknown) => setBodyError(error instanceof Error ? error.message : String(error)))
   }, [expanded, body, api, skill.name])
 
-  const onToggle = useCallback((field: 'modelInvocable' | 'userInvocable', value: boolean) => {
-    setPending(prev => ({ ...prev, [field]: value }))
-    const patch = field === 'modelInvocable' ? { modelInvocable: value } : { userInvocable: value }
-    api.setInvocation(skill.name, patch)
-      .then(() => {
-        setPending(prev => ({ ...prev, [field]: undefined }))
+  const onToggle = useCallback((enabled: boolean) => {
+    setPending({ enabled })
+    api.setInvocation(skill.name, { enabled })
+      .then((next) => {
+        setPending({})
+        onChange(next)
       })
       .catch(() => {
-        setPending(prev => ({ ...prev, [field]: undefined }))
+        setPending({})
         setBodyError(t('toggleFailed'))
       })
-  }, [api, skill.name])
+  }, [api, skill.name, onChange])
 
-  const modelOn = skill.modelInvocable
-  const userOn = skill.userInvocable
+  // The single master toggle reflects BOTH invocation flags in sync.
+  const enabled = skill.modelInvocable && skill.userInvocable
 
   return (
     <div style={rowCard}>
@@ -186,27 +187,14 @@ function SkillRow({
           <input
             type="checkbox"
             disabled={!skill.toggleable}
-            checked={modelOn}
-            onChange={(e) => onToggle('modelInvocable', e.target.checked)}
+            checked={enabled}
+            onChange={(e) => onToggle(e.target.checked)}
           />
           <label style={toggleLabel}>
-            <span style={toggleTitle}>{t('modelInvocationTitle')}</span>
-            <span style={toggleDesc}>{t('modelInvocationDesc')}</span>
+            <span style={toggleTitle}>{t('invocationTitle')}</span>
+            <span style={toggleDesc}>{t('invocationDesc')}</span>
           </label>
-          <span style={toggleDesc}>{modelOn ? t('enabled') : t('disabled')}</span>
-        </div>
-        <div style={toggleRow}>
-          <input
-            type="checkbox"
-            disabled={!skill.toggleable}
-            checked={userOn}
-            onChange={(e) => onToggle('userInvocable', e.target.checked)}
-          />
-          <label style={toggleLabel}>
-            <span style={toggleTitle}>{t('userInvocationTitle')}</span>
-            <span style={toggleDesc}>{t('userInvocationDesc')}</span>
-          </label>
-          <span style={toggleDesc}>{userOn ? t('enabled') : t('disabled')}</span>
+          <span style={toggleDesc}>{enabled ? t('enabled') : t('disabled')}</span>
         </div>
       </div>
 
@@ -269,7 +257,14 @@ export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
         : null}
       {skills === null ? null : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {skills.map(skill => <SkillRow key={skill.name} skill={skill} api={api} />)}
+          {skills.map(skill => (
+            <SkillRow
+              key={skill.name}
+              skill={skill}
+              api={api}
+              onChange={(next) => setSkills(prev => prev?.map(row => row.name === next.name ? next : row) ?? null)}
+            />
+          ))}
         </div>
       )}
     </section>

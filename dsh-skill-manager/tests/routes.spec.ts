@@ -164,7 +164,7 @@ describe('host routes', () => {
     apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
     const req = fakeReq('PUT', '/skill-manager/api/skills/alpha/invocation')
     ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
-      async function* () { yield Buffer.from(JSON.stringify({ modelInvocable: false, userInvocable: false })) }
+      async function* () { yield Buffer.from(JSON.stringify({ enabled: false })) }
     const { out, body } = await invoke(routes[0]!.handler, req)
     expect(out.status).toBe(200)
     const skill = (body as { skill: { modelInvocable: boolean; userInvocable: boolean } }).skill
@@ -172,6 +172,17 @@ describe('host routes', () => {
     expect(skill.userInvocable).toBe(false)
     expect(readFileSync(path, 'utf8')).toContain('disable-model-invocation: true')
     expect(readFileSync(path, 'utf8')).toContain('user-invocable: false')
+  })
+
+  it('rejects a PUT without an enabled boolean', async () => {
+    writeSkill('alpha')
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const req = fakeReq('PUT', '/skill-manager/api/skills/alpha/invocation')
+    ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
+      async function* () { yield Buffer.from(JSON.stringify({ modelInvocable: false })) }
+    const { out } = await invoke(routes[0]!.handler, req)
+    expect(out.status).toBe(400)
   })
 
   it('rejects a request from a non-loopback host', async () => {

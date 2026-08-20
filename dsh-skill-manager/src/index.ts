@@ -21,8 +21,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isTrustedApiRequest } from './trust-fence.ts'
-import { listManagedSkills, setInvocation, SkillWriteError } from './skills.ts'
-import type { InvocationPatch } from './skills.ts'
+import { getSkillBody, listManagedSkills, setInvocation, SkillWriteError } from './skills.ts'
 
 export const name = 'dsh-skill-manager'
 export const inject = ['skills', 'webServer']
@@ -31,10 +30,9 @@ const API_PREFIX = '/skill-manager/api'
 /** Routes that can never be read-only browse targets of a trusted host. */
 const TRUSTED_HOSTS: readonly string[] = []
 
-/** The PUT body: which policy keys to change (omitted keys stay untouched). */
+/** The PUT body: a single master enable flag for BOTH model and user. */
 interface ToggleRequestBody {
-  modelInvocable?: boolean
-  userInvocable?: boolean
+  enabled?: boolean
 }
 
 /** Handle every /skill-manager/api request: fence, route, respond. */
@@ -57,26 +55,24 @@ async function handleApi(
     const bodyMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/body$/.exec(path)
     if (req.method === 'GET' && bodyMatch) {
       const name = decodeURIComponent(bodyMatch[1] ?? '')
-      const def = await ctx.skills.get(name)
-      if (def === undefined) {
+      const content = await getSkillBody(ctx, name)
+      if (content === undefined) {
         sendJson(res, 404, { error: `unknown skill: ${name}` })
         return
       }
-      sendJson(res, 200, { content: def.content })
+      sendJson(res, 200, { content })
       return
     }
     const toggleMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/invocation$/.exec(path)
     if (req.method === 'PUT' && toggleMatch) {
       const name = decodeURIComponent(toggleMatch[1] ?? '')
       const body = await readJson<ToggleRequestBody>(req)
-      const patch: InvocationPatch = {}
-      if (typeof body?.modelInvocable === 'boolean') patch.modelInvocable = body.modelInvocable
-      if (typeof body?.userInvocable === 'boolean') patch.userInvocable = body.userInvocable
-      if (Object.keys(patch).length === 0) {
-        sendJson(res, 400, { error: 'no invocation keys provided' })
+      const enabled = typeof body?.enabled === 'boolean' ? body.enabled : undefined
+      if (enabled === undefined) {
+        sendJson(res, 400, { error: 'missing enabled boolean' })
         return
       }
-      const skill = await setInvocation(ctx, name, patch)
+      const skill = await setInvocation(ctx, name, { enabled })
       sendJson(res, 200, { skill })
       return
     }
@@ -87,7 +83,7 @@ async function handleApi(
       return
     }
     ctx.logger.warn(`[dsh-skill-manager] route error: ${error instanceof Error ? error.stack : String(error)}`)
-    sendJson(res, 500, { error: 'internal error' })
+    sendJson(res, 500, { error: 'internal error', detail: error instanceof Error ? error.message : String(error) })
   }
 }
 

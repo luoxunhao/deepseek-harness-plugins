@@ -19,10 +19,9 @@ export interface ManagedSkill {
 export declare class SkillWriteError extends Error {
     constructor(message: string);
 }
-/** A semantic invocation change: omitted keys stay untouched. */
+/** A single master enable flag driving BOTH model and user invocation in sync. */
 export interface InvocationPatch {
-    modelInvocable?: boolean;
-    userInvocable?: boolean;
+    enabled: boolean;
 }
 /** Whether a skill may be toggled: it has a disk path and is not read-only by source. */
 export declare function isToggleable(def: SkillDefinition): boolean;
@@ -44,13 +43,26 @@ export declare function mergeManagedSkills(registry: readonly ManagedSkill[], di
  */
 export declare function listManagedSkills(ctx: Context, discoverDisk?: () => Promise<DiskSkill[]>): Promise<ManagedSkill[]>;
 /**
- * Write one invocation policy change to a skill's own frontmatter file.
+ * Write one invocation policy change to a skill's own frontmatter file. The
+ * single {@link InvocationPatch.enabled} flag sets model AND user invocation
+ * together (both frontmatter keys are always written, in sync).
  * @param ctx - a context with the `skills` service ready.
  * @param name - the skill to edit (validated against the skill-name grammar).
- * @param patch - which policy keys to set; omitted keys stay untouched.
+ * @param patch - `{ enabled }`: true → both invocable, false → both disabled.
  * @param resolveDisk - user-disk locator (injectable for tests).
  * @returns the refreshed skill row after the write.
  * @throws {@link SkillWriteError} when the name is invalid, the skill is
  *   unknown, not toggleable, or its file carries no frontmatter.
  */
 export declare function setInvocation(ctx: Context, name: string, patch: InvocationPatch, resolveDisk?: (name: string) => Promise<DiskSkill | undefined>): Promise<ManagedSkill>;
+/**
+ * Read one skill's instruction body. Prefers the registry-loaded definition
+ * (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
+ * (a project `fs` masks the user roots), falls back to reading the skill file
+ * directly and stripping its frontmatter. The body is trimmed as DSH trims.
+ * @param ctx - a context with the `skills` service ready.
+ * @param name - the skill to read.
+ * @param resolveDisk - user-disk locator (injectable for tests).
+ * @returns the skill body, or `undefined` when the skill is unknown.
+ */
+export declare function getSkillBody(ctx: Context, name: string, resolveDisk?: (name: string) => Promise<DiskSkill | undefined>): Promise<string | undefined>;

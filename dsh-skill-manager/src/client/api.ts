@@ -18,10 +18,9 @@ export interface ManagedSkill {
   path?: string
 }
 
-/** A partial invocation write (omitted keys stay untouched). */
+/** A single master enable flag driving BOTH model and user invocation. */
 export interface InvocationPatch {
-  modelInvocable?: boolean
-  userInvocable?: boolean
+  enabled: boolean
 }
 
 /** One wire failure. */
@@ -53,12 +52,12 @@ export function createSkillManagerApi() {
       return data.content
     },
 
-    /** Write one skill's invocation policy; returns the refreshed row. */
+    /** Enable/disable a skill's invocation (sets model AND user together). */
     async setInvocation(name: string, patch: InvocationPatch): Promise<ManagedSkill> {
       const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ enabled: patch.enabled }),
       })
       if (!res.ok) throw await apiError('setInvocation', res)
       const data = (await res.json()) as { skill: ManagedSkill }

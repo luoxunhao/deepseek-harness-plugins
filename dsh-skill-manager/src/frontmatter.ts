@@ -100,6 +100,18 @@ export function applyFrontmatterPatch(
 }
 
 /**
+ * Return the instruction body that follows a skill file's frontmatter block
+ * (the text after the closing `---`), or `undefined` when there is no
+ * frontmatter. Callers trim as DSH does. Works on both LF and CRLF files.
+ */
+export function stripFrontmatterBody(source: string): string | undefined {
+  const block = frontmatterSlices(source)
+  if (block === undefined) return undefined
+  // block.tail begins with `${eol}---`; drop that marker, keep the rest.
+  return block.tail.slice(block.eol.length + '---'.length)
+}
+
+/**
  * Minimal scalar parser for a skill file's frontmatter. Skill frontmatter is
  * flat scalar YAML (`name`, `description`, `whenToUse`, `disable-model-invocation`,
  * `user-invocable`); this reads only top-level `key: value` lines and ignores

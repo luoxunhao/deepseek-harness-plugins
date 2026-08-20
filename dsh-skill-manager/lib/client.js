@@ -29,10 +29,8 @@ window.__ModuleLoader__.load({
 			provider: "提供方",
 			path: "文件路径",
 			readOnly: "只读",
-			modelInvocationTitle: "模型可调用",
-			modelInvocationDesc: "该技能是否出现在模型的技能目录，模型可自主调用",
-			userInvocationTitle: "用户可调用",
-			userInvocationDesc: "该技能是否出现在用户命令目录，用户可显式调用",
+			invocationTitle: "启用",
+			invocationDesc: "同时控制模型可调用与用户可调用",
 			enabled: "已启用",
 			disabled: "已关闭",
 			viewBody: "查看正文",
@@ -53,10 +51,8 @@ window.__ModuleLoader__.load({
 			provider: "Provider",
 			path: "File path",
 			readOnly: "Read-only",
-			modelInvocationTitle: "Model-invocable",
-			modelInvocationDesc: "Whether the skill appears in the model's skill catalog and the model may call it on its own",
-			userInvocationTitle: "User-invocable",
-			userInvocationDesc: "Whether the skill appears in the user command catalog and the user may invoke it explicitly",
+			invocationTitle: "Enable",
+			invocationDesc: "Controls both model-invocable and user-invocable",
 			enabled: "On",
 			disabled: "Off",
 			viewBody: "View body",
@@ -92,11 +88,11 @@ window.__ModuleLoader__.load({
 		//#region src/client/SkillsSection.tsx
 		/**
 		* The skill-manager settings section: the merged skill catalog as rows, each
-		* expandable to read the skill's instruction body, and each offering two
-		* independent invocation toggles (model / user) — offered only for skills
-		* that are toggleable (a disk file this plugin may edit). Reads and writes
-		* ride the injected {@link SkillManagerApi} face; the read-only sources
-		* (bundled, runtime) render with a 只读 marker and disabled switches.
+		* expandable to read the skill's instruction body, and each offering a single
+		* enable toggle that drives model AND user invocation together (offered only
+		* for skills that are toggleable — a disk file this plugin may edit). Reads
+		* and writes ride the injected {@link SkillManagerApi} face; the read-only
+		* sources (bundled, runtime) render with a 只读 marker and a disabled switch.
 		*/
 		const card = {
 			display: "flex",
@@ -197,7 +193,7 @@ window.__ModuleLoader__.load({
 			justifyContent: "space-between"
 		};
 		/** One rendered catalog row. */
-		function SkillRow({ skill, api }) {
+		function SkillRow({ skill, api, onChange }) {
 			const [expanded, setExpanded] = (0, react.useState)(false);
 			const [body, setBody] = (0, react.useState)(null);
 			const [bodyError, setBodyError] = (0, react.useState)(null);
@@ -217,27 +213,21 @@ window.__ModuleLoader__.load({
 				api,
 				skill.name
 			]);
-			const onToggle = (0, react.useCallback)((field, value) => {
-				setPending((prev) => ({
-					...prev,
-					[field]: value
-				}));
-				const patch = field === "modelInvocable" ? { modelInvocable: value } : { userInvocable: value };
-				api.setInvocation(skill.name, patch).then(() => {
-					setPending((prev) => ({
-						...prev,
-						[field]: void 0
-					}));
+			const onToggle = (0, react.useCallback)((enabled) => {
+				setPending({ enabled });
+				api.setInvocation(skill.name, { enabled }).then((next) => {
+					setPending({});
+					onChange(next);
 				}).catch(() => {
-					setPending((prev) => ({
-						...prev,
-						[field]: void 0
-					}));
+					setPending({});
 					setBodyError(t("toggleFailed"));
 				});
-			}, [api, skill.name]);
-			const modelOn = skill.modelInvocable;
-			const userOn = skill.userInvocable;
+			}, [
+				api,
+				skill.name,
+				onChange
+			]);
+			const enabled = skill.modelInvocable && skill.userInvocable;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: rowCard,
 				children: [
@@ -266,57 +256,33 @@ window.__ModuleLoader__.load({
 							children: expanded ? t("hideBody") : t("viewBody")
 						})]
 					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: toggles,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: toggleRow,
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 									type: "checkbox",
 									disabled: !skill.toggleable,
-									checked: modelOn,
-									onChange: (e) => onToggle("modelInvocable", e.target.checked)
+									checked: enabled,
+									onChange: (e) => onToggle(e.target.checked)
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
 									style: toggleLabel,
 									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 										style: toggleTitle,
-										children: t("modelInvocationTitle")
+										children: t("invocationTitle")
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 										style: toggleDesc,
-										children: t("modelInvocationDesc")
+										children: t("invocationDesc")
 									})]
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									style: toggleDesc,
-									children: modelOn ? t("enabled") : t("disabled")
+									children: enabled ? t("enabled") : t("disabled")
 								})
 							]
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							style: toggleRow,
-							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									disabled: !skill.toggleable,
-									checked: userOn,
-									onChange: (e) => onToggle("userInvocable", e.target.checked)
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-									style: toggleLabel,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										style: toggleTitle,
-										children: t("userInvocationTitle")
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										style: toggleDesc,
-										children: t("userInvocationDesc")
-									})]
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-									style: toggleDesc,
-									children: userOn ? t("enabled") : t("disabled")
-								})
-							]
-						})]
+						})
 					}),
 					skill.path !== void 0 && skill.toggleable ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
 						style: {
@@ -390,7 +356,8 @@ window.__ModuleLoader__.load({
 						},
 						children: skills.map((skill) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SkillRow, {
 							skill,
-							api
+							api,
+							onChange: (next) => setSkills((prev) => prev?.map((row) => row.name === next.name ? next : row) ?? null)
 						}, skill.name))
 					})
 				]
@@ -421,12 +388,12 @@ window.__ModuleLoader__.load({
 					if (!res.ok) throw await apiError("getBody", res);
 					return (await res.json()).content;
 				},
-				/** Write one skill's invocation policy; returns the refreshed row. */
+				/** Enable/disable a skill's invocation (sets model AND user together). */
 				async setInvocation(name, patch) {
 					const res = await fetch(`/skill-manager/api/skills/${encodeURIComponent(name)}/invocation`, {
 						method: "PUT",
 						headers: { "content-type": "application/json" },
-						body: JSON.stringify(patch)
+						body: JSON.stringify({ enabled: patch.enabled })
 					});
 					if (!res.ok) throw await apiError("setInvocation", res);
 					return (await res.json()).skill;

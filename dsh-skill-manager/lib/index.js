@@ -1,4 +1,4 @@
-import { readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { isModelInvocable, isSkillName, isUserInvocable } from "@deepseek-ai/dsh-skill";
@@ -112,6 +112,16 @@ function applyFrontmatterPatch(source, patch) {
 		next = out;
 	}
 	return next;
+}
+/**
+* Return the instruction body that follows a skill file's frontmatter block
+* (the text after the closing `---`), or `undefined` when there is no
+* frontmatter. Callers trim as DSH does. Works on both LF and CRLF files.
+*/
+function stripFrontmatterBody(source) {
+	const block = frontmatterSlices(source);
+	if (block === void 0) return void 0;
+	return block.tail.slice(block.eol.length + 3);
 }
 /**
 * Minimal scalar parser for a skill file's frontmatter. Skill frontmatter is
@@ -307,23 +317,25 @@ async function listManagedSkills(ctx, discoverDisk = discoverUserSkills) {
 	return mergeManagedSkills(rows, (await discoverDisk()).map(diskToManagedSkill));
 }
 /**
-* Translate a semantic invocation patch into the raw frontmatter keys. The
-* model key is negated: `modelInvocable: false` means "disable model
-* invocation" → `disable-model-invocation: true`; `modelInvocable: true`
-* (the permissive default) removes the key entirely. `userInvocable: false`
-* writes `user-invocable: false`; `true` removes the key.
+* Translate the master enabled flag into the two raw frontmatter keys, always
+* writing BOTH keys so model and user invocation stay in sync. The model key
+* is negated: enabling writes `disable-model-invocation: false`, disabling
+* writes `disable-model-invocation: true`; the user key is positive:
+* `user-invocable: true` on enable, `false` on disable.
 */
 function toFrontmatterPatch(patch) {
-	const out = {};
-	if (patch.modelInvocable !== void 0) out["disable-model-invocation"] = patch.modelInvocable ? void 0 : true;
-	if (patch.userInvocable !== void 0) out["user-invocable"] = patch.userInvocable ? void 0 : false;
-	return out;
+	return {
+		"disable-model-invocation": !patch.enabled,
+		"user-invocable": patch.enabled
+	};
 }
 /**
-* Write one invocation policy change to a skill's own frontmatter file.
+* Write one invocation policy change to a skill's own frontmatter file. The
+* single {@link InvocationPatch.enabled} flag sets model AND user invocation
+* together (both frontmatter keys are always written, in sync).
 * @param ctx - a context with the `skills` service ready.
 * @param name - the skill to edit (validated against the skill-name grammar).
-* @param patch - which policy keys to set; omitted keys stay untouched.
+* @param patch - `{ enabled }`: true → both invocable, false → both disabled.
 * @param resolveDisk - user-disk locator (injectable for tests).
 * @returns the refreshed skill row after the write.
 * @throws {@link SkillWriteError} when the name is invalid, the skill is
@@ -353,11 +365,49 @@ async function setInvocation(ctx, name, patch, resolveDisk = findDiskSkill) {
 	if (def === void 0) throw new SkillWriteError(`unknown skill: ${name}`);
 	throw new SkillWriteError(`skill is not toggleable: ${name} (source: ${def.source})`);
 }
-/** Atomic replace: write a sibling temp file, then rename over the target. */
+/**
+* Read one skill's instruction body. Prefers the registry-loaded definition
+* (`ctx.skills.get`); when the registry cannot surface a user-scope disk skill
+* (a project `fs` masks the user roots), falls back to reading the skill file
+* directly and stripping its frontmatter. The body is trimmed as DSH trims.
+* @param ctx - a context with the `skills` service ready.
+* @param name - the skill to read.
+* @param resolveDisk - user-disk locator (injectable for tests).
+* @returns the skill body, or `undefined` when the skill is unknown.
+*/
+async function getSkillBody(ctx, name, resolveDisk = findDiskSkill) {
+	if (!isSkillName(name)) return void 0;
+	const def = await ctx.skills.get(name);
+	if (def !== void 0) return def.content;
+	const disk = await resolveDisk(name);
+	if (disk === void 0) return void 0;
+	return stripFrontmatterBody(await readFile(disk.path, "utf8"))?.trim();
+}
+/**
+* Atomic replace: write a sibling temp file, then rename over the target. On
+* Windows a rename over an existing target can transiently fail with EPERM
+* when the target is momentarily held (real-time AV scanning, a brief watcher
+* handle); a few retries absorb that, and a final EPERM falls back to an
+* in-place overwrite, which Windows tolerates for an existing file. The target
+* is a tiny markdown file and DSH's watcher uses awaitWriteFinish, so the
+* in-place fallback cannot be mistaken for a partial write.
+*/
 async function atomicWrite(path, content) {
 	const tmp = join(dirname(path), `.${basename(path)}.skill-manager-${process.pid}-${randomBytes(4).toString("hex")}.tmp`);
 	await writeFile(tmp, content, "utf8");
-	await rename(tmp, path);
+	for (let attempt = 0; attempt < 3; attempt += 1) try {
+		await rename(tmp, path);
+		return;
+	} catch (error) {
+		const code = error?.code;
+		if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") throw error;
+		if (attempt === 2) {
+			await writeFile(path, content, "utf8");
+			await rm(tmp, { force: true });
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 60));
+	}
 }
 //#endregion
 //#region src/index.ts
@@ -381,26 +431,24 @@ async function handleApi(ctx, req, res) {
 		const bodyMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/body$/.exec(path);
 		if (req.method === "GET" && bodyMatch) {
 			const name = decodeURIComponent(bodyMatch[1] ?? "");
-			const def = await ctx.skills.get(name);
-			if (def === void 0) {
+			const content = await getSkillBody(ctx, name);
+			if (content === void 0) {
 				sendJson(res, 404, { error: `unknown skill: ${name}` });
 				return;
 			}
-			sendJson(res, 200, { content: def.content });
+			sendJson(res, 200, { content });
 			return;
 		}
 		const toggleMatch = /^\/skill-manager\/api\/skills\/([^/]+)\/invocation$/.exec(path);
 		if (req.method === "PUT" && toggleMatch) {
 			const name = decodeURIComponent(toggleMatch[1] ?? "");
 			const body = await readJson(req);
-			const patch = {};
-			if (typeof body?.modelInvocable === "boolean") patch.modelInvocable = body.modelInvocable;
-			if (typeof body?.userInvocable === "boolean") patch.userInvocable = body.userInvocable;
-			if (Object.keys(patch).length === 0) {
-				sendJson(res, 400, { error: "no invocation keys provided" });
+			const enabled = typeof body?.enabled === "boolean" ? body.enabled : void 0;
+			if (enabled === void 0) {
+				sendJson(res, 400, { error: "missing enabled boolean" });
 				return;
 			}
-			sendJson(res, 200, { skill: await setInvocation(ctx, name, patch) });
+			sendJson(res, 200, { skill: await setInvocation(ctx, name, { enabled }) });
 			return;
 		}
 		sendJson(res, 404, { error: "not found" });
@@ -410,7 +458,10 @@ async function handleApi(ctx, req, res) {
 			return;
 		}
 		ctx.logger.warn(`[dsh-skill-manager] route error: ${error instanceof Error ? error.stack : String(error)}`);
-		sendJson(res, 500, { error: "internal error" });
+		sendJson(res, 500, {
+			error: "internal error",
+			detail: error instanceof Error ? error.message : String(error)
+		});
 	}
 }
 function sendJson(res, status, body) {

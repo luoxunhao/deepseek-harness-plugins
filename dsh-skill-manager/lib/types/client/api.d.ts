@@ -16,10 +16,9 @@ export interface ManagedSkill {
     toggleable: boolean;
     path?: string;
 }
-/** A partial invocation write (omitted keys stay untouched). */
+/** A single master enable flag driving BOTH model and user invocation. */
 export interface InvocationPatch {
-    modelInvocable?: boolean;
-    userInvocable?: boolean;
+    enabled: boolean;
 }
 /** One wire failure. */
 export declare class SkillManagerApiError extends Error {
@@ -32,7 +31,7 @@ export declare function createSkillManagerApi(): {
     list(): Promise<ManagedSkill[]>;
     /** Read one skill's instruction body. */
     getBody(name: string): Promise<string>;
-    /** Write one skill's invocation policy; returns the refreshed row. */
+    /** Enable/disable a skill's invocation (sets model AND user together). */
     setInvocation(name: string, patch: InvocationPatch): Promise<ManagedSkill>;
 };
 export type SkillManagerApi = ReturnType<typeof createSkillManagerApi>;
