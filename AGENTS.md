@@ -54,6 +54,30 @@ web 插件通常拆成两半（`dsh-codex-project/` 是完整范例）：
 - **client half**（浏览器侧）：`src/client/`——React UI。用 `ctx.provide('myService', service)` 发布服务，消费插件 `inject = ['myService']` 后 `ctx.myService` 直接可用；类型合并用 `declare module 'cordis' { interface Context { myService: MyService } }`，消费方 `import type {} from '<plugin>'` 即触发。
 - **构建纯度门**：client bundle 禁止 value-import 其他插件的运行时符号；`import type {}` 会被擦除、不触发门禁——类型可以自由共享，运行时交互必须走服务方法调用。
 
+## Agent 模式（preset）插件
+
+梁神模式（`dsh-presets-liangshen/`）是新形态的完整范例：不注册工具/路由/UI，而是**发行一个 agent preset**——一个目录（`presets/<id>/`，含 `agent.cordis.yml` + 配套 `.mjs` 模块），host 启动时同步进 `~/.dsh/.agent-presets`，新会话即可在预设选择器中选用。`inject = ['systemPrompt']`，只挂一个 announcement section；工具与提示词组装全在 preset 内部。
+
+**`agent.cordis.yml` 是 AGENT-PLANE 组合**，区分两条线：
+
+- **服务行必须进 `cordis:group` + `isolate` realm**（entry-local 私有实例）：不隔离就发布进 root realm、变成进程全局——同名 preset 会撞车，`dsh-agent-presets` 挂载即拒。典型：`persistent-shell`（`isolate.terminals`）、`planning`（`isolate.planMode`）、`compaction`（`isolate.compaction` + `toolResultPruner`）、`delegation`（`isolate.workflowEngine`）。
+- **宿主平面的注册表/服务留在 realm 之外**：`tools`、`fs`、skill registry、`subagents` registry、`workflow`、`web`、`tokenMeter`（全局会话折叠单位）、`tool-result-pruner` 的宿主 policy——preset 只选「能不能调」，不重造单例。
+
+**两阶段引导（`tool-bootstrap.mjs`，`inject = ['systemPrompt', 'tools']`）**——全部 `prepend: true` 挂在瀑布最外层，`await next()` 看到完整下游结果后再过滤：
+
+- `system-prompt/assemble`：阶段一裁剪为「一个平台 shell + `commonTools`」、清空 `contexts`、只留 persona section（`deployment:persona` / 旧名 `persona`）；晋升后还原全部 section 并给 persona 追加 `Your working directory is <cwd>.`（从 session header 读，不靠 `{{cwd}}` 插值，换工作区不失效）。
+- `agent/pre-step`：阶段一只放行 `source.kind === 'user'` 的显式用户消息；晋升后按 `deferredSources` + `deferredGraceSteps` 延迟注入；`instructionHint` 把晋升边界上的 AGENTS.md 全文注入换成一次性非祈使 hint（命名参考文件、按需阅读）——全文注入会翻掉锚定轨迹（上游 #49）。
+- `agent/request`：阶段一用 `bootstrapMaxTokens`（社区实测 1024 处于 "We need" 高命中窗）封顶输出预算；晋升后**必须剥离**该 cap——否则 `requestProposal` 会把上一个 header 的 maxTokens 焊进之后每个请求。
+- `session/event`：晋升后调 `agent.ctx.tools.presentAs('code')` 把 wire 切成 **PTC Mode（单一 `run_code` 工具 + 生成 SDK）**，在 `step/end` 边界切（绝不在 step 中途切，否则打断当步已计划的 native 调用）；`compaction/end` 释放 presentation 并回退到受控阶段。
+
+**晋升判定与状态恢复**：状态以 session 为键（WeakMap），只扫描新增事件（`next` 游标），所以 resume/reload 从持久事件日志重建同相。判定：`tool/call` 后等首块 minimal-like reasoning（含 `we` 且无 `let me`）或 `maxBootstrapSteps` 兜底；`promoteAfterFirstResponse` 让无工具首轮响应后自动晋升。composition drift（缺 bootstrap 工具）降级为全目录 + 一次性告警，绝不锁死会话。
+
+**Windows 平台门**：PTY 后端仅 linux/darwin，win32 用 `disabled: !!js process.platform === 'win32'` 关掉 persistent-shell 组、开 `custom-bash.mjs`（同名 `bash`、Minimal 兼容 schema、走跨平台子进程通道）；两平台恰好一个 `bash`。platform-guard 测试静态断言该极性。
+
+**同步（`src/sync.ts`）**：按字节判同的幂等复制，prune 目标多余文件、`retire` 名单清理退役 preset、只动自己拥有的目录；**禁用 `fs.cpSync`**——Node 22 上含 CJK 字符的路径会以 0xC0000409 致命崩溃（nodejs/node#54476），手写逐项复制并保留 mtime。`agent.cordis.yml` 同步后过 `src/schema.ts` 结构性校验，失败进 `failed` 结果而非静默。
+
+**可移植性**：测试里对路径的断言先做分隔符归一化（`posix()`），`node:path` 跟随运行平台，POSIX 直写断言在 Windows 上必挂。
+
 ## 最小骨架
 
 `src/index.ts` 用 `defineTool` 注册模型工具：
@@ -98,4 +122,5 @@ pnpm ≥10 默认不执行依赖的构建脚本。profile 初始化会生成 `pn
 ## 参考实现
 
 - **`dsh-codex-project/`** —— 本仓库跟踪的典型插件标杆：host half（`src/index.ts`：/read、/write、/file 路由、工具）+ client half（`src/client/`：React UI + 项目文件夹 tab）+ `cordis.patch.yml` + 完整 vitest 套件。
+- **`dsh-presets-liangshen/`** —— Agent 模式（preset）插件的完整范例：两阶段引导 `tool-bootstrap.mjs` + `agent.cordis.yml` AGENT-PLANE 组合 + `src/sync.ts` 幂等同步 + `src/schema.ts` 校验 + 平台门测试。开发要点见上文「Agent 模式（preset）插件」。
 - 官方教程：`E:\project\deepseek-harness\docs\user\develop\basic\index.zh.md`（本文件核心内容的来源）、`tool.md`（工具 DSL）、`config.md`（插件配置）、`framework/service.md`（服务与依赖）。

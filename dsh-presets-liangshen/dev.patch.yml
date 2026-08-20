@@ -1,0 +1,11 @@
+# Local development mount (never shipped): the row `name` points at the built
+# host module so `pnpm dsh web --patch <this-file> --port <p>` mounts the
+# plugin WITHOUT installing it into the profile. On Windows the name must be
+# a file:// URL (a bare E:/ path is parsed as the 'e:' URL scheme).
+#
+# Mirrors cordis.patch.yml: the host-only row syncs the bundled LiangShen
+# agent preset into ~/.dsh/.agent-presets/liangshen and announces through a
+# system-prompt section. No browser half.
+- insert:
+    - id: liangshen
+      name: 'file:///E:/project/deepseek-harness-plugins/dsh-presets-liangshen/lib/index.js'

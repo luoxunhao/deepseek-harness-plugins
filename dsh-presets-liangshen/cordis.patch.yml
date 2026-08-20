@@ -1,0 +1,13 @@
+# dsh-presets-liangshen bundle patch: inserts the host plugin row into the web
+# profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
+# manifest field) over dsh-base; activate with
+# `dsh plugin --profile <name> add <pkg>` (applies this patch automatically),
+# or for local development run from the dsh source tree root:
+# `pnpm dsh web --patch <absolute-path>/cordis.patch.yml`.
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs
+# in the host process and syncs the bundled LiangShen agent preset into
+# ~/.dsh/.agent-presets/liangshen on startup. No browser half.
+- insert:
+    - id: liangshen
+      name: 'dsh-presets-liangshen'
