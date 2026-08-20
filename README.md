@@ -6,8 +6,6 @@ Personal DeepSeek Harness plugins that live **outside** the dsh source tree, so 
 |---|---|
 | [`dsh-codex-project/`](dsh-codex-project/README.md) | 工作区共享子目录：一个工作区挂载任意数量的共享子目录（可跨盘符），会话在 `workspace-write` 权限下直接读写它们（源自 Codex 的项目处理思想；无需 `danger-full-access`）。含「打开本地目录」与「管理工作区」原生「…」菜单入口。 |
 
-> 第三方/外部插件（`dsh-at-file/`、`DSH-better-sidebar/`、`dsh-market/`、`dsh-web-ui/`）作为独立仓库管理，已被 `.gitignore` 忽略，不随本仓库跟踪。
-
 ## Development
 
 每个插件是独立包，自带 lockfile；依赖解析自 npm 发布的 `@deepseek-ai/dsh-*@0.1.0-rc.6`（不依赖 dsh 源码树链接）。插件各自拥有检查命令：
