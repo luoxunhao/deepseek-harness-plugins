@@ -5,3 +5,13 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Third-party / vendored plugins (owned elsewhere; tracked in their own repos)
+/dsh-at-file/
+/DSH-better-sidebar/
+/dsh-market/
+/dsh-web-ui/
+/dsh-agent-teams/
+
+# Local tool state
+/.dsh/

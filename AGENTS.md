@@ -5,6 +5,7 @@
 ## 硬约束
 
 - **零写入 dsh 源码**：`E:\project\deepseek-harness` 只读——不得修改其包、不得提交到它的分支。
+- **本仓库只跟踪自有插件**：第三方/外部插件（`dsh-at-file/`、`DSH-better-sidebar/`、`dsh-market/`、`dsh-web-ui/`）作为独立仓库管理，已被 `.gitignore` 忽略——不要 `git add`、不要把它们做成 submodule。它们只是本地的独立工作副本。
 - **插件独立成包**：`<plugin>/` 自带 package.json（依赖 dsh 包用 `workspace:^`，经 pnpm workspace 链接到 dsh 源码树）、tsconfig、vitest、自己的检查命令（`pnpm --dir <plugin> test` / `typecheck`）。
 - **挂载只走 profile 机制**：官方通道 `dsh plugin --profile <name> add <pkg>`；本地开发用 dsh 源码根目录下的 `pnpm dsh web --patch <绝对路径>/cordis.patch.yml`。插件路径必须是绝对路径——patch 文件只贡献配置，不改 loader 的 profile 目录。
 - 需要 dsh 没有的能力时，优先用 dsh 现成的公开/只读 API 或插件自有路由；确实做不到，先向用户说明取舍，而不是改 dsh。
@@ -48,7 +49,7 @@ export function apply(ctx: Context) {
 
 ## 插件能力：host half 与 client half
 
-web 插件通常拆成两半（`DSH-better-sidebar/` 是完整范例）：
+web 插件通常拆成两半（`dsh-codex-project/` 是完整范例）：
 
 - **host half**（Node 侧）：`src/index.ts`——注册 webServer 路由、WebSocket、工具等，`inject = ['webServer', 'sessions', ...]`。
 - **client half**（浏览器侧）：`src/client/`——React UI。用 `ctx.provide('myService', service)` 发布服务，消费插件 `inject = ['myService']` 后 `ctx.myService` 直接可用；类型合并用 `declare module 'cordis' { interface Context { myService: MyService } }`，消费方 `import type {} from '<plugin>'` 即触发。
@@ -56,7 +57,7 @@ web 插件通常拆成两半（`DSH-better-sidebar/` 是完整范例）：
 
 ## 最小骨架
 
-`tool-sqlite/` 是最小工具插件：`src/index.ts` 用 `defineTool` 注册模型工具：
+`src/index.ts` 用 `defineTool` 注册模型工具：
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
@@ -77,7 +78,7 @@ export function apply(ctx: Context) {
 
 ## 挂载与验证
 
-1. **官方通道（发布）**：`dsh plugin --profile <name> add <pkg>`——CLI 协调 `dsh.profile.bundles` 并应用包内 `dsh.bundle.patch`（即 `cordis.patch.yml`）。`DSH-better-sidebar/cordis.patch.yml` 是模板。
+1. **官方通道（发布）**：`dsh plugin --profile <name> add <pkg>`——CLI 协调 `dsh.profile.bundles` 并应用包内 `dsh.bundle.patch`（即 `cordis.patch.yml`）。
 2. **本地开发**：dsh 源码根目录运行 `pnpm dsh web --patch <plugin>/cordis.patch.yml`（绝对路径），打开 `http://127.0.0.1:3080` 验证。
 3. client half 改动热加载（浏览器硬刷新即可）；host half 改动需重启 `dsh web`。
 
@@ -97,6 +98,6 @@ pnpm ≥10 默认不执行依赖的构建脚本。profile 初始化会生成 `pn
 
 ## 参考实现
 
-- **`DSH-better-sidebar/`** —— 本仓库的典型插件标杆：host half（`src/index.ts`：/sidebar 路由、terminal WebSocket、工具）+ client half（`src/client/`：React UI + `ctx.betterSidebar` 服务）+ `dsh.plugin.json` + `cordis.patch.yml` + CI 挂载冒烟（`tests/e2e/mount.e2e.ts`）。它自己的 `AGENTS.md` 是消费侧接入文档（registerTab / registerFileViewer API），开发前先读。
-- **`tool-sqlite/`** —— 最小工具插件：只注册两个模型工具，无 UI。
+- **`dsh-codex-project/`** —— 本仓库跟踪的典型插件标杆：host half（`src/index.ts`：/read、/write、/file 路由、工具）+ client half（`src/client/`：React UI + 项目文件夹 tab）+ `cordis.patch.yml` + 完整 vitest 套件。
+- **`DSH-better-sidebar/`** —— 外部标杆（被 `.gitignore` 忽略的独立工作副本）：host half（/sidebar 路由、terminal WebSocket、工具）+ client half（`ctx.betterSidebar` 服务）+ `dsh.plugin.json` + CI 挂载冒烟。它的 `AGENTS.md` 是消费侧接入文档（registerTab / registerFileViewer API），开发前先读。
 - 官方教程：`E:\project\deepseek-harness\docs\user\develop\basic\index.zh.md`（本文件核心内容的来源）、`tool.md`（工具 DSL）、`config.md`（插件配置）、`framework/service.md`（服务与依赖）。
