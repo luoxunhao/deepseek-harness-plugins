@@ -1,7 +1,8 @@
 /**
  * 项目文件夹 tab tests: project resolution drives the empty state, the root
  * rows (main + shared + missing), lazy per-directory listing on expand, file
- * open into the better-sidebar editor, and right-click "用文件管理器打开".
+ * preview inline on click, inline editor host mounting, and right-click
+ * "用文件管理器打开".
  */
 
 // @vitest-environment jsdom
@@ -12,7 +13,7 @@ import { act } from 'react-dom/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { ProjectEntry, ProjectListing, ProjectView, SpacesApi } from '../src/client/api.ts'
-import type { BetterSidebarService, ClientRuntimeContext } from '../src/client/context.ts'
+import type { ClientRuntimeContext } from '../src/client/context.ts'
 import { ProjectTab } from '../src/client/project-tab.tsx'
 
 const ROOT_A = 'E:\\proj'
@@ -61,18 +62,6 @@ function fakeApi(project: ProjectView | null, listings: Record<string, ProjectLi
   }
 }
 
-/** A fake better-sidebar service that records openFile calls. */
-function fakeSidebar(): { service: BetterSidebarService; opened: Array<{ sessionId: string; path: string }> } {
-  const opened: Array<{ sessionId: string; path: string }> = []
-  return {
-    opened,
-    service: {
-      registerTab: () => () => {},
-      openFile: (scope, path) => { opened.push({ sessionId: scope.sessionId, path }) },
-    },
-  }
-}
-
 const scope = { sessionId: 's1', cwd: ROOT_A }
 
 /** A fake client runtime ctx recording dispatched file-reference chips. */
@@ -110,12 +99,12 @@ function fakeCtx(): { ctx: ClientRuntimeContext; chips: Array<{ ref: string; lab
  *  The tree is kept mounted until afterEach so React's event delegation (rooted
  *  at the container) stays alive for click/contextmenu dispatch. */
 const mounted: Array<{ root: Root; container: HTMLElement }> = []
-async function renderTab(api: SpacesApi, betterSidebar: BetterSidebarService, ctx: ClientRuntimeContext): Promise<HTMLElement> {
+async function renderTab(api: SpacesApi, ctx: ClientRuntimeContext): Promise<HTMLElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(createElement(ProjectTab, { ctx, api, betterSidebar, scope }))
+    root.render(createElement(ProjectTab, { ctx, api, scope }))
   })
   await act(async () => {})
   mounted.push({ root, container })
@@ -143,14 +132,14 @@ describe('ProjectTab', () => {
 
   it('shows the session cwd as a single root when no project is configured', async () => {
     const fake = fakeApi(null)
-    const tab = await renderTab(fake.api, fakeSidebar().service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     expect(tab.textContent).not.toContain('没有项目共享配置')
     expect(tab.textContent).toContain('proj')
   })
 
   it('renders the main root, shared dir, and a missing-dir flag', async () => {
     const fake = fakeApi(PROJECT)
-    const tab = await renderTab(fake.api, fakeSidebar().service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     expect(tab.textContent).toContain('proj (主)')
     expect(tab.textContent).toContain('shared')
     expect(tab.textContent).toContain('(⚠ directory missing)')
@@ -167,7 +156,7 @@ describe('ProjectTab', () => {
       truncated: false,
     }
     const fake = fakeApi(PROJECT, { [ROOT_A]: listing })
-    const tab = await renderTab(fake.api, fakeSidebar().service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     await act(async () => {
       rowByText(tab, 'proj (主)').click()
     })
@@ -186,8 +175,7 @@ describe('ProjectTab', () => {
       truncated: false,
     }
     const fake = fakeApi(PROJECT, { [ROOT_A]: listing })
-    const sidebar = fakeSidebar()
-    const tab = await renderTab(fake.api, sidebar.service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     await act(async () => {
       rowByText(tab, 'proj (主)').click()
     })
@@ -197,12 +185,11 @@ describe('ProjectTab', () => {
     })
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(fake.read).toEqual([{ cwd: ROOT_A, path: `${ROOT_A}\\readme.md` }])
-    expect(sidebar.opened).toEqual([])
     // The inline preview header shows the opened file's name.
     expect(tab.querySelector('.dsh-cxp-preview-title')?.textContent).toContain('readme.md')
   })
 
-  it('opens a file in the better-sidebar editor from the context menu', async () => {
+  it('keeps the inline editor host mounted and reveals it on 编辑', async () => {
     const listing: ProjectListing = {
       path: ROOT_A,
       entries: [
@@ -211,22 +198,27 @@ describe('ProjectTab', () => {
       truncated: false,
     }
     const fake = fakeApi(PROJECT, { [ROOT_A]: listing })
-    const sidebar = fakeSidebar()
-    const tab = await renderTab(fake.api, sidebar.service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     await act(async () => {
       rowByText(tab, 'proj (主)').click()
     })
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     await act(async () => {
-      rowByText(tab, 'readme.md').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+      rowByText(tab, 'readme.md').click()
     })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    // Markdown starts in preview mode; the CodeMirror host is always mounted
+    // (hidden via the `hidden` attribute) so the view is created on mount and
+    // the edit toggle never renders a blank page.
+    const cmHost = tab.querySelector<HTMLElement>('.dsh-cxp-preview-cm')
+    expect(cmHost).not.toBeNull()
+    expect(cmHost!.hasAttribute('hidden')).toBe(true)
     await act(async () => {
-      const item = Array.from(tab.ownerDocument.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
-        .find(node => node.textContent?.includes('在编辑器中打开'))
-      expect(item).toBeDefined()
-      item!.click()
+      const editButton = Array.from(tab.querySelectorAll('button')).find(b => b.textContent?.trim() === '编辑')
+      expect(editButton).toBeDefined()
+      editButton!.click()
     })
-    expect(sidebar.opened).toEqual([{ sessionId: 's1', path: `${ROOT_A}\\readme.md` }])
+    expect(cmHost!.hasAttribute('hidden')).toBe(false)
   })
 
   it('references a file in chat via the hover @ button', async () => {
@@ -239,7 +231,7 @@ describe('ProjectTab', () => {
     }
     const fake = fakeApi(PROJECT, { [ROOT_A]: listing })
     const runtime = fakeCtx()
-    const tab = await renderTab(fake.api, fakeSidebar().service, runtime.ctx)
+    const tab = await renderTab(fake.api, runtime.ctx)
     await act(async () => {
       rowByText(tab, 'proj (主)').click()
     })
@@ -255,7 +247,7 @@ describe('ProjectTab', () => {
 
   it('opens the context menu on right-click (用文件管理器打开 item present)', async () => {
     const fake = fakeApi(PROJECT)
-    const tab = await renderTab(fake.api, fakeSidebar().service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     await act(async () => {
       rowByText(tab, 'proj (主)').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
     })
@@ -265,7 +257,7 @@ describe('ProjectTab', () => {
   it('surfaces a project-fetch error instead of crashing', async () => {
     const fake = fakeApi(null)
     fake.api.project = async () => { throw new Error('boom') }
-    const tab = await renderTab(fake.api, fakeSidebar().service, fakeCtx().ctx)
+    const tab = await renderTab(fake.api, fakeCtx().ctx)
     expect(tab.textContent).toContain('boom')
   })
 })

@@ -40,10 +40,10 @@ export interface ClientWorkspacesService {
 /**
  * The better-sidebar service face the project tab consumes — restated
  * structurally like the workspaces slice (upstream augmentations do not reach
- * this bundle). Only `registerTab` and `openFile` are used; the descriptor
- * shape matches the documented TabDescriptor subset better-sidebar expects,
- * so the runtime call stays type-compatible. `ctx.betterSidebar` is OPTIONAL:
- * the tab registers only when better-sidebar is installed.
+ * this bundle). Only `registerTab` is used; the descriptor shape matches the
+ * documented TabDescriptor subset better-sidebar expects, so the runtime call
+ * stays type-compatible. `ctx.betterSidebar` is OPTIONAL: the tab registers
+ * only when better-sidebar is installed.
  */
 export interface SidebarTabDescriptor {
   id: string
@@ -57,7 +57,6 @@ export interface SidebarTabDescriptor {
 /** The better-sidebar client service face (subset actually consumed). */
 export interface BetterSidebarService {
   registerTab(descriptor: SidebarTabDescriptor): () => void
-  openFile(scope: SidebarTabScope, path: string, title?: string): void
 }
 
 /** One session scope: the session id plus its working directory. */

@@ -28,7 +28,7 @@ Codex 处理项目时，一个"项目"往往横跨多个目录：主代码库、
 |---|---|
 | 共享子目录配置 | 每个工作区可配置任意数量共享子目录（跨盘符、可裸目录） |
 | 「管理工作区」弹窗 | 原生工作区「…」菜单注入入口：添加/移除共享子目录 |
-| 「项目文件夹」tab | better-sidebar 侧边栏注册的项目多根目录树：主根 + 共享子目录（跨盘符），按层懒加载；仿 Files tab 布局（顶部路径输入框 + 右侧可拖拽文件树 + 左侧内联预览：图片 / PDF / Markdown / HTML / 代码编辑与保存 / 二进制下载），右键目录用文件管理器打开、右键文件可在编辑器中打开 |
+| 「项目文件夹」tab | better-sidebar 侧边栏注册的项目多根目录树：主根 + 共享子目录（跨盘符），按层懒加载；仿 Files tab 布局（顶部路径输入框 + 右侧可拖拽文件树 + 左侧内联预览与编辑：图片 / PDF / Markdown / HTML / 代码编辑与 Ctrl+S 保存 / 二进制下载），右键目录用文件管理器打开 |
 | 「打开本地目录」 | 原生「…」菜单注入入口：用系统文件管理器打开该工作区文件夹（插件自有路由 spawn explorer.exe——不走 workspaces.openPath，避免被 better-sidebar 等插件劫持到侧边栏编辑器） |
 | 多根沙箱 runner | 命中配置的会话，shell/subprocess 自动走多根受限令牌（`lib/runner.js`） |
 | 多根 fs fence | 进程内 fs 工具（read/write/edit）同样按配置可写根放行（`lib/fs.js`） |
@@ -126,7 +126,7 @@ dsh plugin --profile <name> add E:/project/deepseek-harness-plugins/dsh-codex-pr
 
 本地开发用 file:// 挂载 `dev.patch.yml`（`pnpm dsh web --patch <绝对路径>/dev.patch.yml`）；client 改动浏览器硬刷新即可，host 改动需重启 `dsh web`。
 
-**约束**：client bundle 禁止 value-import 其他插件的运行时符号（纯度门）；与 dsh 源码的集成只走公开/只读 API——需要 dsh 没有的能力时，先取舍说明，不改 dsh。`项目文件夹` tab 通过 `betterSidebar.registerTab`/`openFile` 的公开服务接口接入（仅在 better-sidebar 安装时注册），client 侧用结构化再声明消费，不走 value-import。
+**约束**：client bundle 禁止 value-import 其他插件的运行时符号（纯度门）；与 dsh 源码的集成只走公开/只读 API——需要 dsh 没有的能力时，先取舍说明，不改 dsh。`项目文件夹` tab 通过 `betterSidebar.registerTab` 的公开服务接口接入（仅在 better-sidebar 安装时注册），client 侧用结构化再声明消费，不走 value-import。
 
 ## 测试
 
@@ -134,6 +134,7 @@ dsh plugin --profile <name> add E:/project/deepseek-harness-plugins/dsh-codex-pr
 
 ## 版本记录
 
+- **0.11.0**：移除「在编辑器中打开」（`betterSidebar.openFile` 触发 dsh-better-sidebar editor chunk "client module system unavailable"）；修复内联编辑器空白页 bug——CodeMirror host 改为始终挂载（预览态用 `hidden` 隐藏），markdown/html 切到编辑不再空白。
 - **0.10.0**：`项目文件夹` tab 升级为 Files 同级预览——顶部路径输入框 + 右侧可拖拽/可隐藏文件树 + 左侧内联预览（图片 / PDF / Markdown / HTML / 代码编辑与 Ctrl+S 保存 / 二进制下载）；新增 `GET /read`、`POST /write`、`GET /file`（原始字节 + 下载 disposition）路由，全部 fence 到项目可写根；CodeMirror 6 + 语言包内联进 client bundle。
 - **0.9.0**：新增 `项目文件夹` tab——better-sidebar 侧边栏注册项目多根目录树（主根 + 共享子目录，跨盘符），按层懒加载；新增 `GET /project`（cwd 命中项目解析）与 `GET /list`（项目根目录层级，fence 到可写根）路由；点击文件经 `betterSidebar.openFile` 在编辑器打开、右键目录用系统文件管理器打开。
 - **0.8.0**：失效根收窄（narrowing）——配置共享子目录被删后不再 fail loud 连坐，可写集合收窄到现存根；上下文提醒标注缺失根；host 日志首见 warn；GET /dirs 暴露 missingDirs；管理弹窗标注失效根并提供移除按钮；修复无关会话被死根连坐的全局故障。

@@ -501,7 +501,7 @@ const CSS = `
   background: var(--dsw-alias-bg-layer-2, rgba(128, 128, 128, 0.16));
 }
 
-/* --- text editor (CodeMirror + preview modes) --- */
+/* --- inline text editor (CodeMirror + preview modes) --- */
 [data-dsh-codex-project-tab] .dsh-cxp-preview-editor {
   flex: 1;
   min-height: 0;
@@ -589,6 +589,9 @@ const CSS = `
   height: 100%;
   min-height: 100%;
 }
+[data-dsh-codex-project-tab] .dsh-cxp-preview-cm[hidden] {
+  display: none;
+}
 [data-dsh-codex-project-tab] .dsh-cxp-preview-cm .cm-editor {
   height: 100%;
 }
@@ -602,6 +605,16 @@ const CSS = `
   height: 100%;
   border: none;
   display: block;
+}
+[data-dsh-codex-project-tab] .dsh-cxp-preview-code {
+  margin: 0;
+  padding: 10px 14px 24px;
+  font-family: var(--dsw-font-family-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre;
+  overflow: auto;
 }
 `
 

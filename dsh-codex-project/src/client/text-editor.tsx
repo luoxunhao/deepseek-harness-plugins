@@ -1,5 +1,5 @@
 /**
- * The inline code/markdown/html file viewer for the 项目文件夹 tab's preview
+ * The inline code/markdown/html file editor for the 项目文件夹 tab's preview
  * pane: a CodeMirror 6 editor with line wrapping, extension-keyed syntax
  * highlighting, a dirty dot and Ctrl/Cmd+S save (through the plugin's /write
  * route), plus a preview/edit toggle for markdown (MarkdownText from the
@@ -92,9 +92,13 @@ const cmTheme = CodeMirrorView.theme({
 /**
  * The code/markdown/html editor. Markdown/html start in preview mode
  * (rendered output); code files start in edit mode. The CodeMirror view is
- * created once per file path and kept alive (hidden by CSS in preview mode)
- * so toggling modes never loses an un-saved draft. `content` re-seeds the
- * view only when the file changes.
+ * created once per file path and kept alive, so toggling modes never loses an
+ * un-saved draft; `content` re-seeds the view only when the file changes.
+ *
+ * The CodeMirror host is ALWAYS mounted (hidden via CSS in preview mode) so
+ * the view-creation effect runs on mount regardless of the initial mode —
+ * keying it on `mode` or rendering the host only in edit mode would leave the
+ * editor blank until the file changes.
  */
 export function TextEditor(props: TextEditorProps): ReactNode {
   const { api, cwd, path, content, truncated, kind } = props
@@ -216,7 +220,15 @@ export function TextEditor(props: TextEditorProps): ReactNode {
         <div className="dsh-cxp-preview-truncated">文件过大，仅显示前 4 MB（只读部分内容）</div>
       )}
       <div className="dsh-cxp-preview-body">
-        {inEdit && <div className="dsh-cxp-preview-cm" ref={hostRef} data-cm-editor />}
+        {/* The CodeMirror host stays mounted in every mode (hidden via CSS in
+            preview) so the editor is created once on mount and never renders
+            blank when toggling to edit. */}
+        <div
+          className="dsh-cxp-preview-cm"
+          ref={hostRef}
+          data-cm-editor
+          hidden={!inEdit}
+        />
         {!inEdit && kind === 'markdown' && (
           <div className="dsh-cxp-preview-markdown"><MarkdownText text={shown} /></div>
         )}

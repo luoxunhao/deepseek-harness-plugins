@@ -69,7 +69,7 @@
 | `workspace-menu.ts` / `workspace-dialog.tsx` | 「…」菜单注入 + 「管理工作区」弹窗 |
 | `project-tab.tsx` | **项目文件夹 tab**：Files 同级布局 + 自绘多根树（DirNode/FileRow/上下文菜单/@ 按钮） |
 | `preview-pane.tsx` | 内联预览分发（按 viewer 类型 fetch + 渲染） |
-| `text-editor.tsx` | CodeMirror 6 文本编辑器（预览/编辑切换、脏点、Ctrl+S 保存） |
+| `text-editor.tsx` | CodeMirror 6 内联编辑器（预览/编辑切换、脏点、Ctrl/Cmd+S 保存） |
 | `file-reference.ts` | @ 引用 chip 的注册源 + 注入（见 §7） |
 | `viewer.ts` | 扩展名 → viewer 类型、`looksBinary` NUL 探测 |
 | `paths.ts` | 浏览器端路径运算（无 node:path） |
@@ -79,12 +79,12 @@
 
 ### 项目文件夹 tab：Files 同级预览
 
-布局仿 better-sidebar Files tab：**顶部路径输入框 + 右侧可拖拽/可隐藏文件树 + 左侧选中文件的内联预览**。点击文件**不再跳编辑器**，直接在左侧预览；「在编辑器中打开」移到右键菜单（`betterSidebar.openFile`）。
+布局仿 better-sidebar Files tab：**顶部路径输入框 + 右侧可拖拽/可隐藏文件树 + 左侧选中文件的内联预览**。点击文件直接在左侧预览；内联预览支持编辑（代码/Markdown/HTML），不再跳 better-sidebar 编辑器（其 editor chunk 加载报 "client module system unavailable"）。
 
 - **路径输入框**：回车 → `resolvePath(cwd, input)` 解析（相对/绝对、`..` 折叠）→ 内联预览。
 - **预览分发（`preview-pane.tsx`）**：图片 → `<img>`（`/file`）；PDF → 原生 viewer（Blob URL）；二进制 → 下载按钮（`/download`）；Markdown/HTML/代码 → `readFile` 后交给 `text-editor.tsx`。首 8KB 含 NUL → 判定二进制。
-- **文本编辑器（`text-editor.tsx`）**：Markdown/HTML 默认预览（Markdown 用共享的 `MarkdownText`；HTML 用沙箱 iframe，`sandbox="allow-scripts allow-popups allow-downloads allow-modals"`，无 same-origin），代码默认编辑。预览/编辑切换 + 脏点 + `保存` / Ctrl/Cmd+S → `/write`。超过 4MB 显示只读截断提示。
-- **CodeMirror 视图生命周期**：按文件 `path` 创建一次并**常驻**（预览态用 CSS 隐藏），避免切换模式丢失未保存草稿；脏判定用 `baseRef` 镜像盘上文本。
+- **内联编辑器（`text-editor.tsx`）**：Markdown/HTML 默认预览（Markdown 用共享的 `MarkdownText`；HTML 用沙箱 iframe，`sandbox="allow-scripts allow-popups allow-downloads allow-modals"`，无 same-origin），代码默认编辑。预览/编辑切换 + 脏点 + `保存` / Ctrl/Cmd+S → `/write`。超过 4MB 显示只读截断提示。
+- **CodeMirror 视图生命周期**：按文件 `path` 创建一次并**常驻**（预览态用 `hidden` 隐藏，节点不卸载），避免切换模式丢失未保存草稿；脏判定用 `baseRef` 镜像盘上文本。**host 必须始终挂载**（而非仅编辑态渲染），否则 markdown/html 以预览态挂载时视图创建 effect（依赖 `[path, language]`）在 `host === null` 提前返回，切到编辑后不重跑 → 编辑器空白页。
 
 ### @ 引用 chip（`file-reference.ts`）
 
@@ -102,7 +102,7 @@ pnpm --dir dsh-codex-project build       # tsc(types) + tsdown（host ESM + clie
 
 - **产物**：`lib/index.js`（host）、`lib/runner.js`、`lib/fs.js`、`lib/client.js`（浏览器 bundle，CJS closure 工厂注册 id `dsh-codex-project`）。
 - **client 白名单（`tsdown.config.ts` 的 `CLIENT_EXTERNALS`）**：`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、`cordis`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`。纯度门插件在 resolve 阶段拒绝任何其他 `@deepseek-ai/*` value import 与 node 内置。
-- **CodeMirror 内联**：`@codemirror/*` 与 `@lezer/*` 是普通依赖（非 `@deepseek-ai`），经 `noExternal` 内联进 client bundle（约 1.56MB）——这是本插件刻意为之（与 better-sidebar 的 lazy chunk 不同，未拆 chunk）。若希望首屏更小，后续可仿 better-sidebar 拆一个 lazy editor chunk。
+- **CodeMirror 内联**：`@codemirror/*` 与 `@lezer/*` 是普通依赖（非 `@deepseek-ai`），经 `noExternal` 内联进 client bundle——这是本插件刻意为之。若希望首屏更小，后续可仿 better-sidebar 拆一个 lazy editor chunk。
 - 白名单改动（加新 `@deepseek-ai` 依赖前）务必确认它在 web shell 的 `PLATFORM_MODULES`（`packages/client/web/src/platform.ts`）共享表里，否则运行时解析失败。
 
 ## 7. 挂载与验证
@@ -117,7 +117,7 @@ pnpm --dir dsh-codex-project build       # tsc(types) + tsdown（host ESM + clie
 `tests/`（vitest，browser 组件用 jsdom）：
 
 - `dirs-api.spec.ts` — CRUD + 锚定 + 失效根 + 项目解析 + 目录列表（排序/fence 403/跨盘根）+ 读/写/文件字节与下载 disposition。
-- `project-tab.spec.tsx` — 无配置回退单根、根行（主/共享/缺失）、懒加载、**点击即内联预览**、右键「在编辑器中打开」。
+- `project-tab.spec.tsx` — 无配置回退单根、根行（主/共享/缺失）、懒加载、**点击即内联预览**、右键菜单。
 - `file-reference.spec.ts` — @ 引用源注册 / 注入 / 序列化。
 - `client-apply.spec.tsx` / `client-components.spec.tsx` — 插件形态、菜单注入、管理弹窗。
 - `fs.spec.ts` / `seam.spec.ts` / `runner.spec.ts` / `context-injection.spec.ts` / `dirs-migration.spec.ts` — 多根 fence 收窄/隔离/自愈、runner 令牌、上下文提醒。
@@ -128,6 +128,8 @@ pnpm --dir dsh-codex-project build       # tsc(types) + tsdown（host ESM + clie
 
 - **fence 只改一处**：新增项目文件操作路由时，复用 `dirs-api.ts` 的 `fenceFor`；不要另写一份 roots 推导（否则三处漂移）。
 - **`updateListener` 是 `CodeMirrorView.updateListener.of(...)`**，不是 `EditorState.updateListener`（那不存在）。
+
+- **CodeMirror host 必须始终挂载**：`<div className="dsh-cxp-preview-cm" ref={hostRef} hidden={!inEdit}>` 的节点不能条件卸载——视图创建 effect 依赖 `[path, language]`（不含 `mode`），若预览态不渲染 host，effect 在 `host === null` 提前返回，切到编辑后不重跑 → 空白页。用 `hidden` 隐藏而非卸载。
 - **CodeMirror 视图别按 base/content 重建**：按 `path` 常驻；切文件用 `key={path}` 让 `PreviewPane` 整体重挂载（`project-tab.tsx` 已这么做）。
 - **`import.meta` / node 内置**：只存在于 host 侧 `src/*.ts`；client 一律用 `paths.ts`。
 - **路径比较大小写**：Windows 上 `samePath`/`relativePath`/`isPathUnder`（`containment.ts`）都按平台大小写约定处理；跨盘符返回绝对路径回退。

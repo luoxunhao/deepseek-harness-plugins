@@ -4,12 +4,12 @@
  * plus every shared additional dir (cross-drive). The layout mirrors the
  * better-sidebar Files tab: a path input box on top, the project file tree
  * docked on the right (drag-resizable, toggleable), and an inline preview of
- * the selected file on the left (image/PDF/markdown/html/code/binary) instead
- * of jumping to the editor tab. Right-clicking a row opens a context menu
- * (open the folder locally, copy the relative / absolute path, open the file
- * in the editor, or reference the file in chat as a chip that shows the file
- * name and carries its absolute path into the model context); hovering a row
- * reveals the @-reference button.
+ * the selected file on the left (image/PDF/markdown/html/code/binary). The
+ * preview is read-only — inline markdown/html/code rendering, no editor jump,
+ * no editing. Right-clicking a row opens a context menu (open the folder
+ * locally, copy the relative / absolute path, or reference the file in chat
+ * as a chip that shows the file name and carries its absolute path into the
+ * model context); hovering a row reveals the @-reference button.
  *
  * With no shared config the tab falls back to the session's own working
  * directory as a single root, so the tree always has content. The tree is
@@ -36,16 +36,15 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { ProjectEntry, ProjectListing, ProjectView, SpacesApi } from './api.ts'
-import type { BetterSidebarService, ClientRuntimeContext, SidebarTabScope } from './context.ts'
+import type { ClientRuntimeContext, SidebarTabScope } from './context.ts'
 import { insertFileReference } from './file-reference.ts'
 import { basename, relativePath, resolvePath } from './paths.ts'
 import { PreviewPane } from './preview-pane.tsx'
 
-/** The tab's render props: the client ctx, the dirs API, the better-sidebar service, and the session scope. */
+/** The tab's render props: the client ctx, the dirs API, and the session scope. */
 export interface ProjectTabProps {
   ctx: ClientRuntimeContext
   api: SpacesApi
-  betterSidebar: BetterSidebarService
   scope: SidebarTabScope
 }
 
@@ -68,7 +67,7 @@ type RowMenuState = { path: string; isFile: boolean; x: number; y: number } | nu
  * @param props - the client ctx, the dirs API, the better-sidebar service, and the session scope.
  */
 export function ProjectTab(props: ProjectTabProps): ReactNode {
-  const { ctx, api, betterSidebar, scope } = props
+  const { ctx, api, scope } = props
   const cwd = scope.cwd
   const [project, setProject] = useState<ProjectView | null | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
@@ -107,11 +106,6 @@ export function ProjectTab(props: ProjectTabProps): ReactNode {
     setOpenPath(path)
     setPathInput(path)
   }, [])
-
-  /** Open a file in the better-sidebar editor tab instead. */
-  const openInEditor = useCallback((path: string) => {
-    betterSidebar.openFile(scope, path)
-  }, [betterSidebar, scope])
 
   const openDir = useCallback((path: string) => {
     void api.openDirectory(path).catch((reason) => {
@@ -239,7 +233,6 @@ export function ProjectTab(props: ProjectTabProps): ReactNode {
               depth={0}
               defaultOpen={false}
               onOpenFile={openFile}
-              onOpenInEditor={openInEditor}
               onOpenDir={openDir}
               rowAction={rowAction}
               openRowMenu={openRowMenu}
@@ -252,7 +245,7 @@ export function ProjectTab(props: ProjectTabProps): ReactNode {
       <div className="dsh-cxp-tab-body">
         <div className="dsh-cxp-preview-main">
           {openPath !== null && cwd !== undefined
-            ? <PreviewPane key={openPath} api={api} cwd={cwd} path={openPath} onOpenInEditor={openInEditor} />
+            ? <PreviewPane key={openPath} api={api} cwd={cwd} path={openPath} />
             : (
               <div className="dsh-cxp-preview-empty">
                 <div className="dsh-cxp-preview-empty-title">从文件树或上方路径框选择一个文件</div>
@@ -283,9 +276,6 @@ export function ProjectTab(props: ProjectTabProps): ReactNode {
         onClose={() => { setRowMenu(null) }}
         items={[
           { id: 'open-dir', label: '用文件管理器打开', icon: <IconFolderOpenOutline16 size={14} /> },
-          ...(rowMenu?.isFile === true
-            ? [{ id: 'editor', label: '在编辑器中打开', icon: <IconCodeOutline16 size={14} /> }]
-            : []),
           { id: 'relative', label: '复制相对路径', icon: <IconCopyOutline16 size={14} /> },
           { id: 'absolute', label: '复制绝对路径', icon: <IconCopyOutline16 size={14} /> },
           { id: 'reference', label: '添加到对话（@引用）', icon: <IconCodeOutline16 size={14} /> },
@@ -295,7 +285,6 @@ export function ProjectTab(props: ProjectTabProps): ReactNode {
           if (target === null) return
           setRowMenu(null)
           if (id === 'open-dir') { openDir(target.path); return }
-          if (id === 'editor') { openInEditor(target.path); return }
           if (id === 'reference') { reference(target.path); return }
           copyPath(
             id === 'relative' ? relativePath(cwd ?? '', target.path) : target.path,
@@ -331,13 +320,12 @@ function DirNode(props: {
   depth: number
   defaultOpen: boolean
   onOpenFile: (path: string) => void
-  onOpenInEditor: (path: string) => void
   onOpenDir: (path: string) => void
   rowAction: (path: string) => ReactNode
   openRowMenu: (event: MouseEvent, path: string, isFile: boolean) => void
 }): ReactNode {
   const {
-    api, cwd, path, name, depth, defaultOpen, onOpenFile, onOpenInEditor, onOpenDir,
+    api, cwd, path, name, depth, defaultOpen, onOpenFile, onOpenDir,
     rowAction, openRowMenu,
   } = props
   const [expanded, setExpanded] = useState(defaultOpen)
@@ -402,7 +390,6 @@ function DirNode(props: {
                   depth={depth + 1}
                   defaultOpen={false}
                   onOpenFile={onOpenFile}
-                  onOpenInEditor={onOpenInEditor}
                   onOpenDir={onOpenDir}
                   rowAction={rowAction}
                   openRowMenu={openRowMenu}
@@ -414,7 +401,6 @@ function DirNode(props: {
                   entry={entry}
                   depth={depth + 1}
                   onOpenFile={onOpenFile}
-                  onOpenInEditor={onOpenInEditor}
                   rowAction={rowAction}
                   openRowMenu={openRowMenu}
                 />
@@ -431,11 +417,10 @@ function FileRow(props: {
   entry: ProjectEntry
   depth: number
   onOpenFile: (path: string) => void
-  onOpenInEditor: (path: string) => void
   rowAction: (path: string) => ReactNode
   openRowMenu: (event: MouseEvent, path: string, isFile: boolean) => void
 }): ReactNode {
-  const { entry, depth, onOpenFile, onOpenInEditor, rowAction, openRowMenu } = props
+  const { entry, depth, onOpenFile, rowAction, openRowMenu } = props
   return (
     <div
       role="button"

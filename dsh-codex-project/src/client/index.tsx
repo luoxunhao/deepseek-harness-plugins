@@ -3,7 +3,7 @@
  * native workspace 「…」 menu (DOM-level, self-healing) and mounts the
  * manage dialog it opens. When better-sidebar is installed it ALSO registers
  * the 项目文件夹 tab — a multi-root file tree of the project (main root +
- * shared dirs) that opens files in the better-sidebar editor.
+ * shared dirs) with a read-only inline preview.
  *
  * The DOM-level injection follows the dsh-web-ui family precedent: the
  * workspace menu popup is React-managed native code with no extension
@@ -67,7 +67,6 @@ export function apply(ctx: Context): void {
       component: ({ ctx: tabCtx, scope }) => createElement(ProjectTab, {
         ctx: tabCtx,
         api,
-        betterSidebar: ctx.betterSidebar!,
         scope,
       }),
     }))

@@ -21,7 +21,6 @@ export interface PreviewPaneProps {
   api: SpacesApi
   cwd: string
   path: string
-  onOpenInEditor: (path: string) => void
 }
 
 /** A native-browser PDF viewer over a Blob URL (mirrors better-sidebar). */
@@ -39,7 +38,7 @@ function PdfView(props: { url: string; title: string }): ReactNode {
  * @param props - the dirs API, the session cwd, and the file path to preview.
  */
 export function PreviewPane(props: PreviewPaneProps): ReactNode {
-  const { api, cwd, path, onOpenInEditor } = props
+  const { api, cwd, path } = props
   const kind: ViewerKind = viewerKindForPath(path)
   const [load, setLoad] = useState<
     | { status: 'loading' }
@@ -107,10 +106,6 @@ export function PreviewPane(props: PreviewPaneProps): ReactNode {
   const header = (
     <div className="dsh-cxp-preview-header">
       <span className="dsh-cxp-preview-title" title={path}>{basename(path)}</span>
-      <span style={{ flex: 1 }} />
-      <button type="button" className="dsh-cxp-preview-open" title="在编辑器中打开" onClick={() => { onOpenInEditor(path) }}>
-        在编辑器中打开
-      </button>
     </div>
   )
 
