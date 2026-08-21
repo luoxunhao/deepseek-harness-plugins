@@ -35,6 +35,11 @@ export const zh = {
   selectWorkspace: '选择工作区',
   noWorkspaces: '没有可用的工作区',
   projectEmpty: '当前工作区没有项目级技能',
+  import: '导入技能',
+  importTitle: '从 zip 文件导入技能包',
+  importSuccess: '导入成功',
+  importFailed: '导入失败',
+  importConflict: '同名技能已存在',
 } as const
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -64,6 +69,11 @@ export const en: Record<keyof typeof zh, string> = {
   selectWorkspace: 'Select workspace',
   noWorkspaces: 'No workspaces available',
   projectEmpty: 'This workspace has no project-level skills',
+  import: 'Import skill',
+  importTitle: 'Import a skill package from a zip file',
+  importSuccess: 'Imported successfully',
+  importFailed: 'Import failed',
+  importConflict: 'A skill with the same name already exists',
 }
 
 /**

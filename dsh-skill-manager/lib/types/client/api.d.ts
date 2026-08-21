@@ -43,5 +43,10 @@ export declare function createSkillManagerApi(): {
     getBody(name: string, scope?: SkillScope, cwd?: string): Promise<string>;
     /** Enable/disable a skill's invocation for a scope (sets model AND user together). */
     setInvocation(name: string, patch: InvocationPatch, scope?: SkillScope, cwd?: string): Promise<ManagedSkill>;
+    /** Import a skill from a zip binary. Returns the imported skill's name and path. */
+    importZip(zipBuf: ArrayBuffer, scope?: SkillScope, cwd?: string, overwrite?: boolean): Promise<{
+        name: string;
+        path: string;
+    }>;
 };
 export type SkillManagerApi = ReturnType<typeof createSkillManagerApi>;

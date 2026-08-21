@@ -1,8 +1,11 @@
-import { readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { isModelInvocable, isSkillName, isUserInvocable } from "@deepseek-ai/dsh-skill";
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
+import { Buffer as Buffer$1 } from "node:buffer";
+import yauzl from "yauzl";
 //#region src/trust-fence.ts
 function header(headers, name) {
 	const value = headers[name];
@@ -411,7 +414,7 @@ async function setInvocation(ctx, name, patch, deps = {}) {
 		const path = def.path;
 		const next = applyFrontmatterPatch(await readFile(path, "utf8"), toFrontmatterPatch(patch));
 		if (next === void 0) throw new SkillWriteError(`skill file has no frontmatter block: ${path}`);
-		await atomicWrite(path, next);
+		await atomicWrite$1(path, next);
 		const updated = await (scope.kind === "project" ? ctx.skills.get(name, { cwd: scope.cwd }) : ctx.skills.get(name));
 		if (updated === void 0) throw new SkillWriteError(`skill vanished after write: ${name}`);
 		return toManagedSkill(updated);
@@ -420,7 +423,7 @@ async function setInvocation(ctx, name, patch, deps = {}) {
 	if (disk !== void 0) {
 		const next = applyFrontmatterPatch(await readFile(disk.path, "utf8"), toFrontmatterPatch(patch));
 		if (next === void 0) throw new SkillWriteError(`skill file has no frontmatter block: ${disk.path}`);
-		await atomicWrite(disk.path, next);
+		await atomicWrite$1(disk.path, next);
 		const refreshed = parseDiskSkillFile(await readFile(disk.path, "utf8"), disk.path, disk.source);
 		if (refreshed === void 0) throw new SkillWriteError(`skill vanished after write: ${name}`);
 		return diskToManagedSkill(refreshed);
@@ -473,7 +476,7 @@ function listWorkspaces(ctx) {
 * is a tiny markdown file and DSH's watcher uses awaitWriteFinish, so the
 * in-place fallback cannot be mistaken for a partial write.
 */
-async function atomicWrite(path, content) {
+async function atomicWrite$1(path, content) {
 	const tmp = join(dirname(path), `.${basename(path)}.skill-manager-${process.pid}-${randomBytes(4).toString("hex")}.tmp`);
 	await writeFile(tmp, content, "utf8");
 	for (let attempt = 0; attempt < 3; attempt += 1) try {
@@ -489,6 +492,206 @@ async function atomicWrite(path, content) {
 		}
 		await new Promise((resolve) => setTimeout(resolve, 60));
 	}
+}
+//#endregion
+//#region src/skill-package.ts
+/**
+* Skill package (zip) validation and import.
+*
+* A "skill package" is a zip file whose entries form a skill directory:
+* the zip root is either the skill directory itself (SKILL.md at root) or a
+* single top-level directory that contains the skill directory. All entries
+* after stripping the directory shell are extracted into the target root
+* under `<name>/`, where `name` comes from the SKILL.md frontmatter.
+*
+* Security: zip-slip (../), absolute paths, drive letters, symlinks/hardlinks
+* are all rejected. Size and entry-count limits guard against resource abuse.
+*/
+/** Limits for imported skill packages. */
+const MAX_TOTAL_SIZE = 10485760;
+const MAX_ENTRY_COUNT = 200;
+const MAX_SINGLE_FILE = 5242880;
+/** Open a zip buffer and return all non-directory entries. */
+function openZip(buf) {
+	return new Promise((resolve, reject) => {
+		yauzl.fromBuffer(buf, { lazyEntries: true }, (err, zipfile) => {
+			if (err !== null) reject(err);
+			else resolve(zipfile);
+		});
+	});
+}
+/** Read all entries from an opened zip file. */
+function readAllEntries(zipfile) {
+	return new Promise((resolve, reject) => {
+		const entries = [];
+		zipfile.on("entry", (entry) => {
+			entries.push(entry);
+			zipfile.readEntry();
+		});
+		zipfile.on("end", () => resolve(entries));
+		zipfile.on("error", reject);
+		zipfile.readEntry();
+	});
+}
+/** Read an entry's content as a Buffer. */
+function readEntryContent(zipfile, entry) {
+	return new Promise((resolve, reject) => {
+		zipfile.openReadStream(entry, (err, stream) => {
+			if (err !== null) return reject(err);
+			const chunks = [];
+			stream.on("data", (chunk) => chunks.push(chunk));
+			stream.on("end", () => resolve(Buffer$1.concat(chunks)));
+			stream.on("error", reject);
+		});
+	});
+}
+/** Reject unsafe entry names: zip-slip, absolute paths, drive letters. */
+function hasUnsafePath(name) {
+	if (/^[/\\]/.test(name)) return true;
+	if (/^[A-Za-z]:/.test(name)) return true;
+	return name.split(/[/\\]/).some((p) => p === ".." || p === "");
+}
+/**
+* Detect a single top-level directory shell. If ALL non-directory entries
+* contain a subdirectory separator and share the same first path component,
+* strip it.
+*/
+function stripDirectoryShell(fileNames) {
+	if (fileNames.length === 0) return fileNames;
+	if (!fileNames.every((n) => n.includes("/") || n.includes("\\"))) return fileNames;
+	const firstComponents = fileNames.map((n) => n.split(/[/\\]/)[0]);
+	const unique = [...new Set(firstComponents)];
+	if (unique.length === 1) {
+		const prefix = unique[0];
+		return fileNames.map((n) => {
+			const rest = n.slice(prefix.length);
+			return rest.startsWith("/") || rest.startsWith("\\") ? rest.slice(1) : rest;
+		});
+	}
+	return fileNames;
+}
+/** Validate a zip buffer as a skill package. */
+async function validateSkillPackage(zipBuf) {
+	const errors = [];
+	let zipfile;
+	try {
+		zipfile = await openZip(zipBuf);
+	} catch {
+		return {
+			ok: false,
+			errors: ["invalid zip file"]
+		};
+	}
+	let rawEntries;
+	try {
+		rawEntries = await readAllEntries(zipfile);
+	} catch {
+		return {
+			ok: false,
+			errors: ["invalid zip file"]
+		};
+	}
+	const fileEntries = rawEntries.filter((e) => !e.fileName.endsWith("/"));
+	if (fileEntries.length > MAX_ENTRY_COUNT) errors.push(`too many entries: ${fileEntries.length} (max ${MAX_ENTRY_COUNT})`);
+	let totalSize = 0;
+	for (const entry of fileEntries) {
+		totalSize += entry.uncompressedSize;
+		if (entry.uncompressedSize > MAX_SINGLE_FILE) errors.push(`file too large: ${entry.fileName} (${entry.uncompressedSize} bytes, max ${MAX_SINGLE_FILE})`);
+	}
+	if (totalSize > MAX_TOTAL_SIZE) errors.push(`total size too large: ${totalSize} bytes (max ${MAX_TOTAL_SIZE})`);
+	for (const entry of fileEntries) if (hasUnsafePath(entry.fileName)) errors.push(`unsafe path: ${entry.fileName}`);
+	for (const entry of rawEntries) {
+		if (entry.fileName.endsWith("/")) continue;
+		if ((entry.externalFileAttributes >> 16 & 61440) === 40960) errors.push(`symlink not allowed: ${entry.fileName}`);
+	}
+	if (errors.length > 0) return {
+		ok: false,
+		errors
+	};
+	const shellStripped = stripDirectoryShell(fileEntries.map((e) => e.fileName));
+	const skillMdIndex = shellStripped.findIndex((n) => n === "SKILL.md");
+	if (skillMdIndex === -1) return {
+		ok: false,
+		errors: ["missing SKILL.md"]
+	};
+	const skillMdEntry = fileEntries[skillMdIndex];
+	const data = parseFrontmatterScalars((await readEntryContent(zipfile, skillMdEntry)).toString("utf8"));
+	if (data === void 0) return {
+		ok: false,
+		errors: ["SKILL.md has no frontmatter block"]
+	};
+	const name = data.name;
+	if (typeof name !== "string" || !isSkillName(name)) return {
+		ok: false,
+		errors: [`invalid skill name: ${String(name)}`]
+	};
+	const description = data.description;
+	if (typeof description !== "string" || description.trim().length === 0) return {
+		ok: false,
+		errors: ["missing or empty description"]
+	};
+	const entries = fileEntries.map((e, i) => ({
+		name: shellStripped[i],
+		size: e.uncompressedSize
+	}));
+	return {
+		ok: true,
+		name,
+		description,
+		whenToUse: typeof data.whenToUse === "string" ? data.whenToUse : void 0,
+		entries
+	};
+}
+/** Write content to a file atomically (temp + rename). */
+async function atomicWrite(targetPath, content) {
+	const dir = dirname(targetPath);
+	await mkdir(dir, { recursive: true });
+	const tmp = join(dir, `.import-${process.pid}-${randomBytes(4).toString("hex")}.tmp`);
+	await writeFile(tmp, content);
+	for (let attempt = 0; attempt < 3; attempt++) try {
+		await rename(tmp, targetPath);
+		return;
+	} catch (err) {
+		const code = err?.code;
+		if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") throw err;
+		if (attempt === 2) {
+			await writeFile(targetPath, content);
+			return;
+		}
+		await new Promise((r) => setTimeout(r, 60));
+	}
+}
+/** Import a validated skill package into a target root directory. */
+async function importSkillPackage(zipBuf, targetRoot, overwrite) {
+	const validation = await validateSkillPackage(zipBuf);
+	if (!validation.ok) return validation;
+	const name = validation.name;
+	const skillDir = join(targetRoot, name);
+	if (existsSync(skillDir)) {
+		if (overwrite !== true) return {
+			ok: false,
+			errors: [`skill already exists: ${name}`]
+		};
+		const { rmSync } = await import("node:fs");
+		rmSync(skillDir, {
+			recursive: true,
+			force: true
+		});
+	}
+	await mkdir(targetRoot, { recursive: true });
+	const zipfile = await openZip(zipBuf);
+	const fileEntries = (await readAllEntries(zipfile)).filter((e) => !e.fileName.endsWith("/"));
+	const shellStripped = stripDirectoryShell(fileEntries.map((e) => e.fileName));
+	for (let i = 0; i < fileEntries.length; i++) {
+		const entry = fileEntries[i];
+		const relativePath = shellStripped[i];
+		await atomicWrite(join(skillDir, relativePath), await readEntryContent(zipfile, entry));
+	}
+	return {
+		ok: true,
+		name,
+		path: skillDir
+	};
 }
 //#endregion
 //#region src/index.ts
@@ -564,6 +767,34 @@ async function handleApi(ctx, req, res) {
 			sendJson(res, 200, { skill: await setInvocation(ctx, name, { enabled }, { scope }) });
 			return;
 		}
+		if (req.method === "POST" && path === `${API_PREFIX}/skills/import`) {
+			const scope = scopeFromQuery(url);
+			if (scope === void 0) {
+				sendJson(res, 400, { error: "missing cwd for project scope" });
+				return;
+			}
+			const overwrite = url.searchParams.get("overwrite") === "true";
+			const zipBuf = await readBody(req);
+			if (zipBuf.length === 0) {
+				sendJson(res, 400, { error: "empty request body" });
+				return;
+			}
+			const targetRoot = scope.kind === "project" ? (await projectSkillRoots(scope.cwd)).find((r) => r.source === "project-dsh")?.path : userSkillRoots().find((r) => r.source === "user-dsh")?.path;
+			if (targetRoot === void 0) {
+				sendJson(res, 400, { error: "cannot resolve target root for scope" });
+				return;
+			}
+			const result = await importSkillPackage(zipBuf, targetRoot, overwrite);
+			if (!result.ok) {
+				sendJson(res, 400, { error: result.errors.join("; ") });
+				return;
+			}
+			sendJson(res, 200, {
+				name: result.name,
+				path: result.path
+			});
+			return;
+		}
 		sendJson(res, 404, { error: "not found" });
 	} catch (error) {
 		if (error instanceof SkillWriteError) {
@@ -591,6 +822,11 @@ async function readJson(req) {
 	} catch {
 		return;
 	}
+}
+async function readBody(req) {
+	const chunks = [];
+	for await (const chunk of req) chunks.push(chunk);
+	return Buffer.concat(chunks);
 }
 /**
 * Plugin body: register the loopback-fenced API routes. Disposal of the

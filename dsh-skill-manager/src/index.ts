@@ -10,6 +10,8 @@
  *   GET  /skill-manager/api/skills/:name/body?scope=&cwd=          → { content }
  *   PUT  /skill-manager/api/skills/:name/invocation?scope=&cwd=    → { skill }
  *        body: { enabled }
+ *   POST /skill-manager/api/skills/import?scope=&cwd=&overwrite=   → { skill }
+ *        body: <zip binary>
  *
  * `scope` selects user-level vs one workspace's project-level skills; `cwd`
  * (the workspace directory) is required for project scope and is the only
@@ -33,6 +35,8 @@ import {
   SkillWriteError,
 } from './skills.ts'
 import type { SkillScope } from './skills.ts'
+import { importSkillPackage } from './skill-package.ts'
+import { projectSkillRoots, userSkillRoots } from './user-skills.ts'
 
 export const name = '@luoxunhao/dsh-skill-manager'
 export const inject = ['skills', 'webServer']
@@ -116,6 +120,33 @@ async function handleApi(
       sendJson(res, 200, { skill })
       return
     }
+    if (req.method === 'POST' && path === `${API_PREFIX}/skills/import`) {
+      const scope = scopeFromQuery(url)
+      if (scope === undefined) {
+        sendJson(res, 400, { error: 'missing cwd for project scope' })
+        return
+      }
+      const overwrite = url.searchParams.get('overwrite') === 'true'
+      const zipBuf = await readBody(req)
+      if (zipBuf.length === 0) {
+        sendJson(res, 400, { error: 'empty request body' })
+        return
+      }
+      const targetRoot = scope.kind === 'project'
+        ? (await projectSkillRoots(scope.cwd)).find((r) => r.source === 'project-dsh')?.path
+        : userSkillRoots().find((r) => r.source === 'user-dsh')?.path
+      if (targetRoot === undefined) {
+        sendJson(res, 400, { error: 'cannot resolve target root for scope' })
+        return
+      }
+      const result = await importSkillPackage(zipBuf, targetRoot, overwrite)
+      if (!result.ok) {
+        sendJson(res, 400, { error: result.errors.join('; ') })
+        return
+      }
+      sendJson(res, 200, { name: result.name, path: result.path })
+      return
+    }
     sendJson(res, 404, { error: 'not found' })
   } catch (error) {
     if (error instanceof SkillWriteError) {
@@ -142,6 +173,12 @@ async function readJson<T>(req: IncomingMessage): Promise<T | undefined> {
   } catch {
     return undefined
   }
+}
+
+async function readBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk)
+  return Buffer.concat(chunks)
 }
 
 /**

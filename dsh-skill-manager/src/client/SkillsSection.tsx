@@ -6,7 +6,7 @@
  * and writes ride the injected {@link SkillManagerApi} face; the read-only
  * sources (bundled, runtime) render with a 只读 marker and a disabled switch.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ManagedSkill, SkillManagerApi, SkillScope, Workspace } from './api.ts'
@@ -275,10 +275,22 @@ export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
       setPending(false)
       return
     }
+    const start = Date.now()
     api.list(target, target === 'project' ? ws?.path : undefined)
-      .then(setSkills)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setPending(false))
+      .then((list) => {
+        setSkills(list)
+        // Keep loading indicator visible for at least 300ms so the user sees feedback
+        const elapsed = Date.now() - start
+        if (elapsed < 300) {
+          setTimeout(() => setPending(false), 300 - elapsed)
+        } else {
+          setPending(false)
+        }
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err))
+        setPending(false)
+      })
   }, [api])
 
   useEffect(() => {
@@ -313,6 +325,28 @@ export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
     }
   }, [scope, load, workspaces, selectedWsId])
 
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
+
+  const onImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file === undefined) return
+    setImporting(true)
+    setImportMsg(null)
+    try {
+      const buf = await file.arrayBuffer()
+      const result = await api.importZip(buf, scope, scope === 'project' ? selectedWs?.path : undefined)
+      setImportMsg(`${t('importSuccess')}: ${result.name}`)
+      refresh()
+    } catch {
+      setImportMsg(t('importFailed'))
+    } finally {
+      setImporting(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }, [api, scope, selectedWs, refresh])
+
   return (
     <section style={card}>
       <div style={tabs}>
@@ -341,21 +375,34 @@ export function SkillsSection(props: SkillManagerSectionProps): ReactNode {
                   ))}
               </select>
             </label>
-            <button type="button" style={linkButton} onClick={refresh}>
-              {pending ? t('loading') : t('refresh')}
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input ref={fileInputRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={onImportFile} />
+              <button type="button" style={linkButton} disabled={importing} onClick={() => fileInputRef.current?.click()}>
+                {importing ? t('loading') : t('import')}
+              </button>
+              <button type="button" style={linkButton} onClick={refresh}>
+                {pending ? t('loading') : t('refresh')}
+              </button>
+            </div>
           </div>
         )
         : (
           <div style={refreshRow}>
             <p style={meta}>{t('intro')}</p>
-            <button type="button" style={linkButton} onClick={refresh}>
-              {pending ? t('loading') : t('refresh')}
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input ref={fileInputRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={onImportFile} />
+              <button type="button" style={linkButton} disabled={importing} onClick={() => fileInputRef.current?.click()}>
+                {importing ? t('loading') : t('import')}
+              </button>
+              <button type="button" style={linkButton} onClick={refresh}>
+                {pending ? t('loading') : t('refresh')}
+              </button>
+            </div>
           </div>
         )}
 
       {error !== null ? <div style={errorText}>{error}</div> : null}
+      {importMsg !== null ? <div style={{ ...meta, color: importMsg.startsWith(t('importSuccess')) ? '#16a34a' : '#c0392b' }}>{importMsg}</div> : null}
       {skills === null && error === null
         ? <div style={meta}>{t('loading')}</div>
         : null}

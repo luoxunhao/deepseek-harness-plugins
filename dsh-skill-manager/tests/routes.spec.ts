@@ -2,12 +2,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Buffer } from 'node:buffer'
+import { crc32 } from 'node:zlib'
+import * as yazl from 'yazl'
 import { apply } from '../src/index.ts'
 
 // Isolate host routes from the real user-scope disk skills: the route under
 // test must be deterministic regardless of what lives in ~/.agents/skills.
+let mockUserRoot = ''
 vi.mock('../src/user-skills.ts', () => ({
-  userSkillRoots: () => [],
+  userSkillRoots: () => mockUserRoot ? [{ source: 'user-dsh', path: mockUserRoot }] : [],
   parseDiskSkillFile: (raw: string, path: string, source: string) => ({ name: 'x', description: 'd', source, path, modelInvocable: true, userInvocable: true }),
   discoverUserSkills: async () => [],
   findDiskSkill: async () => undefined,
@@ -16,6 +20,29 @@ vi.mock('../src/user-skills.ts', () => ({
   discoverProjectSkills: async () => [],
   findProjectDiskSkill: async () => undefined,
 }))
+
+// Mock skill-package.ts to bypass root resolution — route test only exercises the HTTP layer
+let mockImportDir = ''
+vi.mock('../src/skill-package.ts', () => ({
+  importSkillPackage: async (zipBuf: Buffer, targetRoot: string, overwrite?: boolean) => {
+    const { importSkillPackage: realImport } = await vi.importActual<typeof import('../src/skill-package.ts')>('../src/skill-package.ts')
+    return realImport(zipBuf, mockImportDir || targetRoot, overwrite)
+  },
+}))
+
+/** Build a minimal valid zip buffer (same as skill-package.spec.ts helper). */
+async function createTestZip(entries: Array<{ name: string; content: string }>): Promise<Buffer> {
+  return new Promise((resolve) => {
+    const zip = new yazl.ZipFile()
+    for (const entry of entries) {
+      zip.addBuffer(Buffer.from(entry.content, 'utf8'), entry.name, { mode: 0o644 })
+    }
+    zip.end()
+    const chunks: Buffer[] = []
+    zip.outputStream.on('data', (chunk: Buffer) => chunks.push(chunk))
+    zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)))
+  })
+}
 // Type-only: pulls the webServer service's Context merge (ctx.webServer).
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { Context } from '@deepseek-ai/cordis'
@@ -118,6 +145,8 @@ let defs: Map<string, { path: string; source: string }>
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'skill-manager-routes-'))
+  mockImportDir = dir
+  mockUserRoot = dir
   defs = new Map()
 })
 
@@ -247,5 +276,41 @@ describe('host routes', () => {
     const { out, body } = await invoke(routes[0]!.handler, fakeReq('GET', '/skill-manager/api/workspaces'))
     expect(out.status).toBe(200)
     expect(body.workspaces).toEqual([])
+  })
+
+  it('imports a skill from a zip on POST /skill-manager/api/skills/import', async () => {
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const zip = await createTestZip([{ name: 'SKILL.md', content: '---\nname: imported-skill\ndescription: An imported skill\n---\n\n# Imported\nBody.\n' }])
+    const req = fakeReq('POST', '/skill-manager/api/skills/import?scope=user')
+    // Attach the zip buffer as the request body
+    ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
+      async function* () { yield zip }
+    const { out, body } = await invoke(routes[0]!.handler, req)
+    expect(out.status).toBe(200)
+    expect(body.name).toBe('imported-skill')
+    expect(readFileSync(join(dir, 'imported-skill', 'SKILL.md'), 'utf8')).toContain('name: imported-skill')
+  })
+
+  it('returns 400 for an invalid zip on import', async () => {
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const req = fakeReq('POST', '/skill-manager/api/skills/import?scope=user')
+    ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
+      async function* () { yield Buffer.from('not a zip') }
+    const { out } = await invoke(routes[0]!.handler, req)
+    expect(out.status).toBe(400)
+  })
+
+  it('defaults to user scope when no scope query param is given', async () => {
+    const { webServer, routes } = fakeWebServer()
+    apply(miniCtx(fakeSkills(defs, dir), webServer, { warn: () => {} } as never))
+    const zip = await createTestZip([{ name: 'SKILL.md', content: '---\nname: auto-user\ndescription: d\n---\n\nb\n' }])
+    const req = fakeReq('POST', '/skill-manager/api/skills/import')
+    ;(req as unknown as { [Symbol.asyncIterator]: () => AsyncGenerator<Buffer> })[Symbol.asyncIterator] =
+      async function* () { yield zip }
+    const { out, body } = await invoke(routes[0]!.handler, req)
+    expect(out.status).toBe(200)
+    expect(body.name).toBe('auto-user')
   })
 })

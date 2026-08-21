@@ -42,7 +42,12 @@ window.__ModuleLoader__.load({
 			workspace: "工作区",
 			selectWorkspace: "选择工作区",
 			noWorkspaces: "没有可用的工作区",
-			projectEmpty: "当前工作区没有项目级技能"
+			projectEmpty: "当前工作区没有项目级技能",
+			import: "导入技能",
+			importTitle: "从 zip 文件导入技能包",
+			importSuccess: "导入成功",
+			importFailed: "导入失败",
+			importConflict: "同名技能已存在"
 		};
 		/** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 		const en = {
@@ -70,7 +75,12 @@ window.__ModuleLoader__.load({
 			workspace: "Workspace",
 			selectWorkspace: "Select workspace",
 			noWorkspaces: "No workspaces available",
-			projectEmpty: "This workspace has no project-level skills"
+			projectEmpty: "This workspace has no project-level skills",
+			import: "Import skill",
+			importTitle: "Import a skill package from a zip file",
+			importSuccess: "Imported successfully",
+			importFailed: "Import failed",
+			importConflict: "A skill with the same name already exists"
 		};
 		/**
 		* The dictionary namespace this plugin owns in the DSH locale registry.
@@ -371,7 +381,16 @@ window.__ModuleLoader__.load({
 					setPending(false);
 					return;
 				}
-				api.list(target, target === "project" ? ws?.path : void 0).then(setSkills).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setPending(false));
+				const start = Date.now();
+				api.list(target, target === "project" ? ws?.path : void 0).then((list) => {
+					setSkills(list);
+					const elapsed = Date.now() - start;
+					if (elapsed < 300) setTimeout(() => setPending(false), 300 - elapsed);
+					else setPending(false);
+				}).catch((err) => {
+					setError(err instanceof Error ? err.message : String(err));
+					setPending(false);
+				});
 			}, [api]);
 			(0, react.useEffect)(() => {
 				api.listWorkspaces().then((list) => {
@@ -401,6 +420,31 @@ window.__ModuleLoader__.load({
 				load,
 				workspaces,
 				selectedWsId
+			]);
+			const fileInputRef = (0, react.useRef)(null);
+			const [importing, setImporting] = (0, react.useState)(false);
+			const [importMsg, setImportMsg] = (0, react.useState)(null);
+			const onImportFile = (0, react.useCallback)(async (e) => {
+				const file = e.target.files?.[0];
+				if (file === void 0) return;
+				setImporting(true);
+				setImportMsg(null);
+				try {
+					const buf = await file.arrayBuffer();
+					const result = await api.importZip(buf, scope, scope === "project" ? selectedWs?.path : void 0);
+					setImportMsg(`${t("importSuccess")}: ${result.name}`);
+					refresh();
+				} catch {
+					setImportMsg(t("importFailed"));
+				} finally {
+					setImporting(false);
+					if (fileInputRef.current) fileInputRef.current.value = "";
+				}
+			}, [
+				api,
+				scope,
+				selectedWs,
+				refresh
 			]);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 				style: card,
@@ -444,27 +488,80 @@ window.__ModuleLoader__.load({
 									]
 								}, ws.id))
 							})]
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							style: linkButton,
-							onClick: refresh,
-							children: pending ? t("loading") : t("refresh")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								display: "flex",
+								gap: "8px",
+								alignItems: "center"
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									ref: fileInputRef,
+									type: "file",
+									accept: ".zip",
+									style: { display: "none" },
+									onChange: onImportFile
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: linkButton,
+									disabled: importing,
+									onClick: () => fileInputRef.current?.click(),
+									children: importing ? t("loading") : t("import")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: linkButton,
+									onClick: refresh,
+									children: pending ? t("loading") : t("refresh")
+								})
+							]
 						})]
 					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: refreshRow,
 						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 							style: meta,
 							children: t("intro")
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							style: linkButton,
-							onClick: refresh,
-							children: pending ? t("loading") : t("refresh")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								display: "flex",
+								gap: "8px",
+								alignItems: "center"
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									ref: fileInputRef,
+									type: "file",
+									accept: ".zip",
+									style: { display: "none" },
+									onChange: onImportFile
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: linkButton,
+									disabled: importing,
+									onClick: () => fileInputRef.current?.click(),
+									children: importing ? t("loading") : t("import")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: linkButton,
+									onClick: refresh,
+									children: pending ? t("loading") : t("refresh")
+								})
+							]
 						})]
 					}),
 					error !== null ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: errorText,
 						children: error
+					}) : null,
+					importMsg !== null ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							...meta,
+							color: importMsg.startsWith(t("importSuccess")) ? "#16a34a" : "#c0392b"
+						},
+						children: importMsg
 					}) : null,
 					skills === null && error === null ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: meta,
@@ -539,6 +636,19 @@ window.__ModuleLoader__.load({
 					});
 					if (!res.ok) throw await apiError("setInvocation", res);
 					return (await res.json()).skill;
+				},
+				/** Import a skill from a zip binary. Returns the imported skill's name and path. */
+				async importZip(zipBuf, scope = "user", cwd, overwrite = false) {
+					const params = new URLSearchParams(scopeQuery(scope, cwd).replace(/^\?/, ""));
+					if (overwrite) params.set("overwrite", "true");
+					const qs = params.toString();
+					const url = `/skill-manager/api/skills/import${qs !== "" ? `?${qs}` : ""}`;
+					const res = await fetch(url, {
+						method: "POST",
+						body: zipBuf
+					});
+					if (!res.ok) throw await apiError("importZip", res);
+					return await res.json();
 				}
 			};
 		}

@@ -34,6 +34,11 @@ export declare const zh: {
     readonly selectWorkspace: "选择工作区";
     readonly noWorkspaces: "没有可用的工作区";
     readonly projectEmpty: "当前工作区没有项目级技能";
+    readonly import: "导入技能";
+    readonly importTitle: "从 zip 文件导入技能包";
+    readonly importSuccess: "导入成功";
+    readonly importFailed: "导入失败";
+    readonly importConflict: "同名技能已存在";
 };
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 export declare const en: Record<keyof typeof zh, string>;

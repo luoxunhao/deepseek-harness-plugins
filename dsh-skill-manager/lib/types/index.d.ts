@@ -10,6 +10,8 @@
  *   GET  /skill-manager/api/skills/:name/body?scope=&cwd=          → { content }
  *   PUT  /skill-manager/api/skills/:name/invocation?scope=&cwd=    → { skill }
  *        body: { enabled }
+ *   POST /skill-manager/api/skills/import?scope=&cwd=&overwrite=   → { skill }
+ *        body: <zip binary>
  *
  * `scope` selects user-level vs one workspace's project-level skills; `cwd`
  * (the workspace directory) is required for project scope and is the only

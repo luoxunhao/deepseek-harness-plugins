@@ -90,6 +90,17 @@ export function createSkillManagerApi() {
       const data = (await res.json()) as { skill: ManagedSkill }
       return data.skill
     },
+
+    /** Import a skill from a zip binary. Returns the imported skill's name and path. */
+    async importZip(zipBuf: ArrayBuffer, scope: SkillScope = 'user', cwd?: string, overwrite = false): Promise<{ name: string; path: string }> {
+      const params = new URLSearchParams(scopeQuery(scope, cwd).replace(/^\?/, ''))
+      if (overwrite) params.set('overwrite', 'true')
+      const qs = params.toString()
+      const url = `/skill-manager/api/skills/import${qs !== '' ? `?${qs}` : ''}`
+      const res = await fetch(url, { method: 'POST', body: zipBuf })
+      if (!res.ok) throw await apiError('importZip', res)
+      return (await res.json()) as { name: string; path: string }
+    },
   }
 }
 
