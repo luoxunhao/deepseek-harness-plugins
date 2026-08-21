@@ -9,6 +9,7 @@
 | [`dsh-codex-project/`](dsh-codex-project/README.md) | web 插件（host + client） | 工作区共享子目录 + 项目文件夹 tab（预览/引用）+ /read、/write、/file 路由 + `add-dir` 工具 |
 | [`dsh-presets-liangshen/`](dsh-presets-liangshen/README.md) | Agent 模式（preset）插件 | 发行「梁神模式」agent preset：两阶段锚定 + PTC Mode 切换 |
 | [`dsh-skill-manager/`](dsh-skill-manager/README.md) | web 插件（host + client） | 「设置 → 技能」面板：浏览技能目录、查看正文、切换调用策略 |
+| [`dsh-mcp-panel/`](dsh-mcp-panel/README.md) | web 插件（host + client） | 「设置 → MCP」面板：管理 profile patch 受管块中的 MCP 服务器行（增删改启停 + 测试连接），连接归官方 mcp-client |
 
 ## 硬约束
 

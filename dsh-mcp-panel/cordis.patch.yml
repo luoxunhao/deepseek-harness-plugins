@@ -1,0 +1,18 @@
+# dsh-mcp-panel bundle patch
+#
+# This file is the `dsh.bundle.patch` layer: when the plugin is installed
+# through the official CLI —
+#
+#   dsh plugin --profile <name> add @luoxunhao/dsh-mcp-panel
+#
+# — the command reconciles `dsh.profile.bundles` against installed packages
+# and, seeing this declaration, appends `@luoxunhao/dsh-mcp-panel` to the
+# bundle stack. The profile boot then merges THIS patch (a single `insert` of
+# the plugin row) exactly like a manual cordis.patch.yml mount line.
+#
+# Local development without installing: mount via
+#   pnpm dsh web --patch <absolute>/dsh-mcp-panel/cordis.patch.yml
+# with the row's `name` pointed at the built module.
+- insert:
+    - id: mcp-panel
+      name: '@luoxunhao/dsh-mcp-panel'

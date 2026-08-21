@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Build output & binaries
+lib/
+*.exe
+
 # Logs & OS noise
 *.log
 .DS_Store
@@ -15,3 +19,5 @@ Thumbs.db
 
 # Local tool state
 .dsh/skills/ponytail/
+.agents/skills/dsh-plugin-development/
+dsh-mcp-panel/examples/mcp-go-server/
